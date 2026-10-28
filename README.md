@@ -1,5 +1,8 @@
 # HF Contact
 
+[![build](https://github.com/Saltyhaus/hf-contact/actions/workflows/build.yml/badge.svg)](https://github.com/Saltyhaus/hf-contact/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/Saltyhaus/hf-contact)](https://github.com/Saltyhaus/hf-contact/releases/latest)
+
 Echo test and short messages to a [Mercury](https://github.com/Rhizomatica/mercury) station, over HF, through your own Mercury modem.
 
 ![HF Contact after an echo test, a message and a reply](docs/screenshot.png)
@@ -20,12 +23,14 @@ By default it calls **AG7JC**. Settings can point it at any station running merc
 
 ## Install
 
-**Windows:** download `HF-Contact.exe` from [Releases](../../releases) and run it. No install, no Python needed.
+**Windows:** download **[HF-Contact.exe](https://github.com/Saltyhaus/hf-contact/releases/latest/download/HF-Contact.exe)** (latest release) and run it. No install, no Python needed.
+
+> Windows may say *"Windows protected your PC"* the first time. The .exe isn't code-signed, which is normal for small open-source tools. Click **More info › Run anyway**. It's built from this repo's source by GitHub Actions; the build log is on the [Actions](https://github.com/Saltyhaus/hf-contact/actions) tab.
 
 **Linux:** you need Python 3.9 or newer with Tk.
 ```
 sudo apt install python3-tk          # Debian/Ubuntu, if Tk isn't there yet
-git clone <this repo> && cd hf-contact
+git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 ./hf-contact.py
 ```
 
