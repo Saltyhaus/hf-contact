@@ -29,3 +29,21 @@ class Helpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveStatus(unittest.TestCase):
+    def test_describe(self):
+        from hf_contact.status import describe
+        base = {"callsign": "AG7JC", "status": "listening", "freq_hz": 14105000, "updated_unix": 1000,
+                "stale_after": 300}
+        self.assertEqual(describe(base, now=1060), ("listening", "AG7JC is listening now on 14.105 MHz"))
+        self.assertEqual(describe(dict(base, status="busy"), now=1060)[0], "busy")
+        self.assertEqual(describe(base, now=1000 + 7200), ("off", "AG7JC is off the air (last update 2 h ago)"))
+        self.assertEqual(describe(dict(base, status="off", freq_hz=None), now=1060)[0], "off")
+        self.assertEqual(describe(None)[0], "unknown")
+        self.assertEqual(describe({"updated_unix": "x"})[0], "unknown")
+
+    def test_fetch_failure_is_none(self):
+        from hf_contact.status import fetch
+        self.assertIsNone(fetch("http://127.0.0.1:1/station.json", timeout=1))
+        self.assertIsNone(fetch(""))

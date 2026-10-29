@@ -21,10 +21,24 @@ import hf_contact.session as sess
 _orig = sess.run_session
 appmod.run_session = lambda cfg, **kw: _orig(cfg, idle_after=3, connect_timeout=15, echo_timeout=20, **kw)
 
+import http.server, json as _json, threading as _th
+class _H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        now = int(time.time())
+        body = _json.dumps({"callsign": "AG7JC", "status": "listening", "freq_hz": 14105000, "mode": "PKTUSB",
+                            "updated_unix": now - 30, "stale_after": 300, "recent_echoes": []}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+_srv = http.server.HTTPServer(("127.0.0.1", 18799), _H)
+_th.Thread(target=_srv.serve_forever, daemon=True).start()
+
 root = tk.Tk()
 root.geometry("560x860+0+0")
 a = appmod.App(root)
 a.store.settings["port"] = 18710
+a.store.settings["status_url"] = "http://127.0.0.1:18799/station.json"
+root.after(100, a._refresh_live)
 a.call_var.set("k1abc"); a.grid_var.set("fn42"); a.name_var.set("Pat")
 
 def shot(name):

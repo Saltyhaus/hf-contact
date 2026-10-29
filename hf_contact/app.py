@@ -17,6 +17,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from . import __version__
+from . import status as station_status
 from .session import MAX_MESSAGE, compose_message, echo_summary, run_session, valid_call
 
 DEFAULT_STATION = {
@@ -42,7 +43,7 @@ class Store:
         self.settings_path = self.dir / "settings.json"
         self.history_path = self.dir / "history.json"
         self.settings = {"mycall": "", "grid": "", "name": "", "host": "127.0.0.1", "port": 8300,
-                         "station": dict(DEFAULT_STATION)}
+                         "station": dict(DEFAULT_STATION), "status_url": station_status.DEFAULT_URL}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -78,6 +79,7 @@ class App:
         self._load_fields()
         self._render_history()
         self.root.after(150, self._pump)
+        self.root.after(300, self._refresh_live)
         root.protocol("WM_DELETE_WINDOW", self._quit)
 
     # ------------------------------------------------------------ look
@@ -131,6 +133,15 @@ class App:
         ttk.Button(top, text="Settings…", style="Link.TButton", command=self._settings).pack(side="right")
         self.station_info = ttk.Label(card, text="", style="CardDim.TLabel", wraplength=500, justify="left")
         self.station_info.pack(anchor="w", pady=(4, 0))
+        live = ttk.Frame(card, style="Card.TFrame")
+        live.pack(fill="x", pady=(6, 0))
+        self.live_light = tk.Canvas(live, width=12, height=12, bg=PANEL, highlightthickness=0)
+        self.live_light.pack(side="left")
+        self.live_dot = self.live_light.create_oval(1, 1, 11, 11, fill=GRAY, outline="")
+        self.live_lbl = ttk.Label(live, text="Checking whether the station is on the air…", style="CardDim.TLabel",
+                                  wraplength=470, justify="left")
+        self.live_lbl.pack(side="left", padx=6)
+        self.live_state = "unknown"
 
         # you
         me = ttk.Frame(outer)
@@ -249,6 +260,32 @@ class App:
         for h in self.store.history:
             self._write_history(h["when"], h["kind"], h["text"])
 
+    def _refresh_live(self):
+        url = self.store.settings.get("status_url", "")
+        if not self.busy:
+            threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(url))),
+                             daemon=True).start()
+        self.root.after(120000, self._refresh_live)
+
+    def _show_live(self, doc):
+        state, text = station_status.describe(doc)
+        self.live_state = state
+        self.live_light.itemconfigure(self.live_dot, fill={"listening": GREEN, "busy": ORANGE,
+                                                           "off": RED}.get(state, GRAY))
+        self.live_lbl.configure(text=text)
+
+    def _go_anyway(self):
+        """Ask before calling a station that says it's off the air or busy.
+        Unknown (no internet) never stops anyone."""
+        call = self.store.settings["station"]["call"]
+        if self.live_state == "off":
+            return messagebox.askyesno("HF Contact", f"{call} looks off the air right now, so nobody may "
+                                       f"answer.\n\nCall anyway?")
+        if self.live_state == "busy":
+            return messagebox.askyesno("HF Contact", f"{call} is in a call with someone else right now.\n\n"
+                                       f"Call anyway?")
+        return True
+
     def _toggle_log(self):
         if self.log_shown:
             self.modem_log.pack_forget()
@@ -300,7 +337,7 @@ class App:
             self._start(cfg, message=msg, typed=text)
 
     def _start(self, cfg, echo=False, message=None, typed=None):
-        if self.busy:
+        if self.busy or not self._go_anyway():
             return
         self.busy = True
         self.cancel = threading.Event()
@@ -337,6 +374,8 @@ class App:
                     self._set_light(GREEN)
                 elif kind == "echo":
                     self._set_light(TEAL)
+                elif kind == "live":
+                    self._show_live(val)
                 elif kind == "done":
                     self._done(val)
         except queue.Empty:
@@ -345,6 +384,8 @@ class App:
 
     def _done(self, r):
         self.busy = False
+        threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(
+            self.store.settings.get("status_url", "")))), daemon=True).start()
         for b in (self.echo_btn, self.check_btn, self.send_btn):
             b.state(["!disabled"])
         self.cancel_btn.pack_forget()
@@ -391,7 +432,8 @@ class App:
                   ("Its frequency (shown only)", "freq", s["station"].get("freq", "")),
                   ("Note (shown only)", "note", s["station"].get("note", "")),
                   ("Mercury address", "host", s.get("host", "127.0.0.1")),
-                  ("Mercury TNC port", "port", str(s.get("port", 8300)))]
+                  ("Mercury TNC port", "port", str(s.get("port", 8300))),
+                  ("Live status URL (optional)", "status_url", s.get("status_url", ""))]
         vars_ = {}
         for i, (label, key, val) in enumerate(fields):
             ttk.Label(frm, text=label, style="Dim.TLabel").grid(row=i, column=0, sticky="w", pady=4, padx=(0, 10))
@@ -415,15 +457,20 @@ class App:
             s["station"] = {"call": call, "freq": vars_["freq"].get().strip(), "note": vars_["note"].get().strip()}
             s["host"] = vars_["host"].get().strip() or "127.0.0.1"
             s["port"] = port
+            s["status_url"] = vars_["status_url"].get().strip()
             self.store.save()
             self._show_station()
             win.destroy()
+            self._show_live(None)
+            threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(s["status_url"]))),
+                             daemon=True).start()
 
         def reset():
             for k, v in DEFAULT_STATION.items():
                 vars_[k].set(v)
             vars_["host"].set("127.0.0.1")
             vars_["port"].set("8300")
+            vars_["status_url"].set(station_status.DEFAULT_URL)
 
         btns = ttk.Frame(frm)
         btns.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e")

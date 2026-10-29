@@ -36,14 +36,17 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 
 ## Use
 
-1. Enter your callsign. Grid and name are optional.
-2. **Echo test**: it calls, sends a ping, shows the station's report on you, and hangs up.
-3. **Send message**: same, with your text.
-4. **Check for replies**: calls and collects anything waiting for you.
+1. Check the light under **Calling**. It shows whether the station is on the air right now, from the same live feed as its website. With no internet it just says "unavailable", and you can still call.
+2. Enter your callsign. Grid and name are optional.
+3. **Echo test**: it calls, sends a ping, shows the station's report on you, and hangs up.
+4. **Send message**: same, with your text.
+5. **Check for replies**: calls and collects anything waiting for you.
 
 **Hang up** ends a call early. History keeps everything on this computer, and the **Modem log** shows what Mercury reported.
 
-Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**.
+If the station says it's off the air or busy, the app asks before calling.
+
+Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address if you're calling a station other than AG7JC.
 
 ## Good to know
 
