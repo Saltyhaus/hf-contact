@@ -268,7 +268,7 @@ class App:
         self.root.after(120000, self._refresh_live)
 
     def _show_live(self, doc):
-        state, text = station_status.describe(doc)
+        state, text = station_status.describe(doc, call=self.store.settings["station"].get("call", "The station"))
         self.live_state = state
         self.live_light.itemconfigure(self.live_dot, fill={"listening": GREEN, "busy": ORANGE,
                                                            "off": RED}.get(state, GRAY))

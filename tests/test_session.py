@@ -34,16 +34,18 @@ if __name__ == "__main__":
 class LiveStatus(unittest.TestCase):
     def test_describe(self):
         from hf_contact.status import describe
-        base = {"callsign": "AG7JC", "status": "listening", "freq_hz": 14105000, "updated_unix": 1000,
-                "stale_after": 300}
-        self.assertEqual(describe(base, now=1060), ("listening", "AG7JC is listening now on 14.105 MHz"))
-        self.assertEqual(describe(dict(base, status="busy"), now=1060)[0], "busy")
-        self.assertEqual(describe(base, now=1000 + 7200), ("off", "AG7JC is off the air (last update 2 h ago)"))
-        self.assertEqual(describe(dict(base, status="off", freq_hz=None), now=1060)[0], "off")
+        base = {"status": "listening", "busy": False, "freq_mhz": 14.105, "mode": "Mercury",
+                "updated": "2026-10-29T11:40:00Z", "echoes": []}
+        t = 1793274000   # 2026-10-29T11:40:00Z
+        self.assertEqual(describe(base, now=t + 60, call="AG7JC"), ("listening", "AG7JC is listening now on 14.105 MHz"))
+        self.assertEqual(describe(dict(base, busy=True), now=t + 60)[0], "busy")
+        self.assertEqual(describe(dict(base, status="off", freq_mhz=None), now=t + 60)[0], "off")
+        self.assertEqual(describe(base, now=t + 3 * 3600, call="AG7JC"),
+                         ("off", "AG7JC hasn't checked in since 3 h ago -- probably off the air"))
         self.assertEqual(describe(None)[0], "unknown")
-        self.assertEqual(describe({"updated_unix": "x"})[0], "unknown")
+        self.assertEqual(describe({"updated": "yesterday"})[0], "unknown")
 
     def test_fetch_failure_is_none(self):
         from hf_contact.status import fetch
-        self.assertIsNone(fetch("http://127.0.0.1:1/station.json", timeout=1))
+        self.assertIsNone(fetch("http://127.0.0.1:1/hf-contact.json", timeout=1))
         self.assertIsNone(fetch(""))

@@ -46,7 +46,7 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 
 If the station says it's off the air or busy, the app asks before calling.
 
-Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address if you're calling a station other than AG7JC.
+Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address (the station website's hf-contact.json) if you're calling a station other than AG7JC.
 
 ## Good to know
 

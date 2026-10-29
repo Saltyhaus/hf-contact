@@ -6,8 +6,10 @@ internet (common in the field) just means "unknown", never a block.
 import json
 import time
 import urllib.request
+from datetime import datetime, timezone
 
-DEFAULT_URL = "https://ag7jc.com/station.json"
+DEFAULT_URL = "https://ag7jc.com/data/hf-contact.json"
+STALE_AFTER = 15 * 60          # same as the website: older than this = no recent check-in
 
 
 def fetch(url, timeout=6):
@@ -34,22 +36,30 @@ def _ago(sec):
     return f"{round(sec / 86400)} days ago"
 
 
-def describe(doc, now=None):
-    """(state, text): state is listening / busy / off / unknown."""
+def _parse_iso(text):
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def describe(doc, now=None, call="The station"):
+    """(state, text): state is listening / busy / off / unknown.
+    doc is the website's hf-contact.json:
+      {"status": "listening"|"off", "busy": bool, "freq_mhz": 14.105, "updated": ISO UTC, ...}"""
     if not doc:
         return "unknown", "Live status unavailable (no internet?) -- you can still call"
     now = now or time.time()
-    call = str(doc.get("callsign", "The station"))[:12]
-    try:
-        age = now - int(doc.get("updated_unix", 0))
-        stale = age > int(doc.get("stale_after", 300))
-    except (TypeError, ValueError):
+    updated = _parse_iso(doc.get("updated"))
+    if updated is None:
         return "unknown", "Live status unreadable -- you can still call"
-    status = "off" if stale else doc.get("status")
-    freq = doc.get("freq_hz")
-    on = f" on {freq / 1e6:.3f} MHz".replace("0 MHz", " MHz") if isinstance(freq, int) else ""
-    if status == "listening":
-        return "listening", f"{call} is listening now{on}"
-    if status == "busy":
+    age = max(0, now - updated)
+    freq = doc.get("freq_mhz")
+    on = f" on {freq:.3f} MHz" if isinstance(freq, (int, float)) and not isinstance(freq, bool) else ""
+    if age > STALE_AFTER:
+        return "off", f"{call} hasn't checked in since {_ago(age)} -- probably off the air"
+    if doc.get("status") == "listening" and doc.get("busy") is True:
         return "busy", f"{call} is in a call right now -- try again in a few minutes"
-    return "off", f"{call} is off the air (last update {_ago(max(0, age))})"
+    if doc.get("status") == "listening":
+        return "listening", f"{call} is listening now{on}"
+    return "off", f"{call} is off the air (updated {_ago(age)})"
