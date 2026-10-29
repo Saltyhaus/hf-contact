@@ -66,11 +66,19 @@ def echo_summary(reply_text):
 
 
 def run_session(cfg, echo=False, message=None, progress=lambda kind, text: None,
-                connect_timeout=180, idle_after=25, echo_timeout=180, max_seconds=900, cancel=None):
+                connect_timeout=180, idle_after=25, echo_timeout=180, max_seconds=900, cancel=None,
+                slow_idle_after=None, slow_bps=300):
     """cfg: dict with mycall, target, host, port, grid (optional).
     Blocking -- run it in a worker thread. progress(kind, text) is called
-    from this thread for status updates."""
+    from this thread for status updates.
+
+    The call ends once our own traffic is out and nothing has arrived for
+    idle_after seconds. Below slow_bps (or before the modem has reported a
+    speed) the wait is slow_idle_after (default 4 x idle_after): at the
+    slowest Mercury modes a short reply from the station, with retries,
+    can take a minute or more, and hanging up early cuts it off."""
     r = Result()
+    slow_idle = slow_idle_after if slow_idle_after is not None else idle_after * 4
     mycall = cfg["mycall"].strip().upper()
     target = cfg["target"].strip().upper()
 
@@ -175,7 +183,8 @@ def run_session(cfg, echo=False, message=None, progress=lambda kind, text: None,
             echo_done = not echo or r.echo_reply or now - sent_at > echo_timeout
             if echo and not r.echo_reply and now - sent_at > echo_timeout:
                 r.error = "No echo reply came back (the station may not have guest mode on)."
-            if ours_out and echo_done and now - last > idle_after:
+            quiet_limit = idle_after if (r.bitrate or 0) >= slow_bps else slow_idle
+            if ours_out and echo_done and now - last > quiet_limit:
                 break
 
         if tnc.connected:
