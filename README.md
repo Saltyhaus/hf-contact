@@ -17,7 +17,7 @@ By default it calls **AG7JC**. Settings can point it at any station running merc
 
 ## What you need
 
-- **Mercury** (1.9.13 or newer recommended) running on this computer, set up with your radio's audio and PTT.
+- **Mercury** running on this computer, set up with your radio's audio and PTT. **Use the same Mercury version as the station you're calling**: different versions can hear each other's calls without connecting (1.9.13 and 1.9.21 don't). AG7JC runs **1.9.21**.
 - **Nothing else using Mercury.** It only accepts one program at a time, so close Winlink Express, Pat or mercury-connector first.
 - **Your radio on the station's frequency.** For AG7JC, that's **14.105 MHz USB (dial)**.
 
