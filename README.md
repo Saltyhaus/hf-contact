@@ -37,6 +37,7 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 ## Use
 
 1. Check the light under **Calling**. It shows whether the station is on the air right now, from the same live feed as its website. With no internet it just says "unavailable", and you can still call.
+   Under it, the app compares your Mercury with the station's: green if they match, orange if they don't (different versions hear each other but don't connect). It asks the Mercury that's running on this computer, so start Mercury first. With no internet there's no comparison, and you can still call.
 2. Enter your callsign. Grid and name are optional.
 3. **Echo test**: it calls, sends a ping, shows the station's report on you, and hangs up.
 4. **Send message**: same, with your text.
@@ -44,7 +45,9 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 
 **Hang up** ends a call early. History keeps everything on this computer, and the **Modem log** shows what Mercury reported.
 
-If the station says it's off the air or busy, the app asks before calling.
+<img src="docs/version-mismatch.png" alt="Your Mercury differs from the station's" width="420">
+
+If the station says it's off the air or busy, or your Mercury version doesn't match the station's, the app asks before calling.
 
 Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address (the station website's hf-contact.json) if you're calling a station other than AG7JC.
 
@@ -76,7 +79,7 @@ It uses the same interface as the VARA-style TNC: a text control port (`MYCALL`,
 ## Development
 
 ```
-python3 -m unittest tests.test_session
+python3 -m unittest tests.test_session tests.test_mercury_version
 CONNECTOR=/path/to/mercury-connector python3 -m unittest tests.test_end_to_end
 ```
 

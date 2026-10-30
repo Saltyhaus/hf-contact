@@ -11,12 +11,14 @@ import os
 import queue
 import sys
 import threading
+import webbrowser
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 from . import __version__
+from . import mercury_version as mv
 from . import status as station_status
 from .session import MAX_MESSAGE, compose_message, echo_summary, run_session, valid_call
 
@@ -142,6 +144,15 @@ class App:
                                   wraplength=470, justify="left")
         self.live_lbl.pack(side="left", padx=6)
         self.live_state = "unknown"
+        ver = ttk.Frame(card, style="Card.TFrame")
+        ver.pack(fill="x", pady=(4, 0))
+        self.ver_lbl = ttk.Label(ver, text="", style="CardDim.TLabel", wraplength=470, justify="left")
+        self.ver_lbl.pack(anchor="w", padx=(18, 6))
+        self.ver_link = ttk.Button(ver, text="Get Mercury \u2192", style="Link.TButton",
+                                   command=lambda: webbrowser.open(mv.RELEASES_URL))
+        self.local_mercury = ("unknown", None)
+        self.station_mercury = None
+        self.ver_kind = None
 
         # you
         me = ttk.Frame(outer)
@@ -265,6 +276,8 @@ class App:
         if not self.busy:
             threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(url))),
                              daemon=True).start()
+            threading.Thread(target=lambda: self.events.put(("mercury", mv.local_version())),
+                             daemon=True).start()
         self.root.after(120000, self._refresh_live)
 
     def _show_live(self, doc):
@@ -273,6 +286,19 @@ class App:
         self.live_light.itemconfigure(self.live_dot, fill={"listening": GREEN, "busy": ORANGE,
                                                            "off": RED}.get(state, GRAY))
         self.live_lbl.configure(text=text)
+        self.station_mercury = mv.station_version(doc)
+        self._show_version()
+
+    def _show_version(self):
+        call = self.store.settings["station"].get("call", "The station")
+        res = mv.compare(self.local_mercury, self.station_mercury, call)
+        self.ver_kind = res[0] if res else None
+        self.ver_lbl.configure(text=res[1] if res else "",
+                               foreground={"match": GREEN, "mismatch": ORANGE}.get(self.ver_kind, DIM))
+        if self.ver_kind == "mismatch":
+            self.ver_link.pack(anchor="w", padx=(12, 0))
+        else:
+            self.ver_link.pack_forget()
 
     def _go_anyway(self):
         """Ask before calling a station that says it's off the air or busy.
@@ -284,6 +310,8 @@ class App:
         if self.live_state == "busy":
             return messagebox.askyesno("HF Contact", f"{call} is in a call with someone else right now.\n\n"
                                        f"Call anyway?")
+        if self.ver_kind == "mismatch":
+            return messagebox.askyesno("HF Contact", self.ver_lbl.cget("text") + "\n\nCall anyway?")
         return True
 
     def _toggle_log(self):
@@ -376,6 +404,9 @@ class App:
                     self._set_light(TEAL)
                 elif kind == "live":
                     self._show_live(val)
+                elif kind == "mercury":
+                    self.local_mercury = val
+                    self._show_version()
                 elif kind == "done":
                     self._done(val)
         except queue.Empty:
