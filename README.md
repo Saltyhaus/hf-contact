@@ -12,6 +12,7 @@ You already run Mercury with your radio. HF Contact uses it to call a station an
 - **Echo test**: the station answers right away, in the same call, with how it heard you (SNR and speed as its modem measured them). It's a quick "can we hear each other?" check.
 - **Send a message**: a short text (2000 characters), signed with your name and grid if you add them.
 - **Check for replies**: anything the operator wrote back is waiting at the station. It's sent to you the next time you call.
+- **Run an echo service** (new in 0.4.0): your own station answers other people's echo tests while you're away, so there's one more station to test against.
 
 By default it calls **AG7JC**. Settings can point it at any station running mercury-connector with guest mode (see [The other end](#the-other-end)).
 
@@ -34,6 +35,8 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 ./hf-contact.py
 ```
 
+To put it in your app menu with its icon: `./install.sh` (undo with `./install.sh --remove`).
+
 ## Use
 
 1. Check the light under **Calling**. It shows whether the station is on the air right now, from the same live feed as its website. With no internet it just says "unavailable", and you can still call.
@@ -50,6 +53,33 @@ git clone https://github.com/Saltyhaus/hf-contact.git && cd hf-contact
 If the station says it's off the air or busy, or your Mercury version doesn't match the station's, the app asks before calling.
 
 Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address (the station website's hf-contact.json) if you're calling a station other than AG7JC.
+
+## Run an echo service
+
+Tick **Run an echo service** and your Mercury answers calls to your callsign by itself. Anyone with HF Contact (or a mercury-connector station) can call you for an echo test and get back how you heard them, in the same format AG7JC sends.
+
+![HF Contact running an echo service, after answering a caller](docs/echo-service.png)
+
+- **Echo tests only.** Messages people send aren't kept. The caller gets one short note saying so, and History notes that a message came in (not what it said).
+- **Limits**, so an unattended station can't be kept on the air: 3 echo replies per call, a call is hung up after 3 minutes or after 60 seconds of nothing, and each caller gets 6 calls an hour.
+- **Your own calls come first.** Press Echo test or Send message and the service pauses, then goes back to listening when you're done.
+- **Hours:** under **Settings**, all the time or between two hours (this computer's time). Outside them, Mercury is left alone. The switch is always off when the app starts.
+- History lists every echo it answered, with the caller's signal.
+
+<img src="docs/echo-service-settings.png" alt="Echo service settings: hours and dial frequency" width="420">
+
+### Where you may run it (US)
+
+With the service on, your station transmits with nobody at the radio. In the US that's **automatic control** ([47 CFR 97.221](https://www.law.cornell.edu/cfr/text/47/97.221)): General class or higher, and only inside the automatic-control data segments, unless someone is monitoring.
+
+| Band | Segment | Dial (USB) for Mercury's 2.3 kHz signal |
+|---|---|---|
+| 20 m | 14.0950–14.0995 and 14.1005–14.112 MHz | **14.101–14.109 MHz** |
+| 40 m | 7.100–7.105 MHz | **7.100–7.102 MHz** |
+
+There are segments on 80, 30, 17, 15, 12 and 10 m too. Mercury's signal sits about 0.35–2.65 kHz above the dial, so the whole of it has to fit inside a segment (14.100 itself is the beacon window, between the two 20 m segments).
+
+Put your dial frequency in **Settings** and the app checks it. Outside a segment you get a warning, not a block: *you are running outside the automatic control segment in the US, must monitor or be in an area that allows.* Other countries have their own rules, and you may be sitting at the radio. HF Contact doesn't tune your radio; it only checks the number you give it.
 
 ## Good to know
 
@@ -79,11 +109,11 @@ It uses the same interface as the VARA-style TNC: a text control port (`MYCALL`,
 ## Development
 
 ```
-python3 -m unittest tests.test_session tests.test_mercury_version
+python3 -m unittest tests.test_session tests.test_mercury_version tests.test_echo_service
 CONNECTOR=/path/to/mercury-connector python3 -m unittest tests.test_end_to_end
 ```
 
-The end-to-end test runs a real mercury-connector (with `-g`) against the app, over `tests/fake_air.py`: two fake Mercury modems joined by a fake radio path.
+`test_echo_service` has HF Contact call HF Contact: one fake modem runs the echo service, the other calls it the normal way. The end-to-end test runs a real mercury-connector (with `-g`) against the app, over `tests/fake_air.py`: two fake Mercury modems joined by a fake radio path.
 
 ## License
 

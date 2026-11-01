@@ -36,7 +36,7 @@ class MercuryTnc:
     messages come out of .events as (kind, value) tuples:
 
         ("line", text)            every control line, for the log
-        ("connected", peer)       ARQ link up
+        ("connected", peer)       ARQ link up (.link_source is who called)
         ("disconnected", None)    link down
         ("snr", float)            what OUR modem hears from the other end
         ("bitrate", int)
@@ -51,12 +51,15 @@ class MercuryTnc:
         self.ctl = self.dat = None
         self.connected = False
         self.version = None
+        self.link_source = self.link_dest = None   # "CONNECTED <source> <destination> <bw>"
         self._stop = threading.Event()
         self._timeout = timeout
 
     # ------------------------------------------------------------ setup
 
-    def open(self, mycall):
+    def open(self, mycall, listen=False):
+        """listen=False: only call out (the app's own calls). listen=True:
+        Mercury answers calls to mycall by itself (the echo service)."""
         try:
             self.ctl = socket.create_connection((self.host, self.port), timeout=self._timeout)
         except OSError as e:
@@ -72,9 +75,9 @@ class MercuryTnc:
         threading.Thread(target=self._read_dat, daemon=True).start()
         busy = TncError("Mercury closed the connection. Another program (Winlink Express, Pat, "
                         "mercury-connector...) is probably using it -- close that first.")
-        # same setup mercury-connector uses; we only call out, never listen
+        # same setup mercury-connector uses
         try:
-            for cmd in (f"MYCALL {mycall}", "LISTEN OFF", "PUBLIC OFF", "BW2300", "P2P SESSION", "VERSION"):
+            for cmd in (f"MYCALL {mycall}", "LISTEN ON" if listen else "LISTEN OFF", "PUBLIC OFF", "BW2300", "P2P SESSION", "VERSION"):
                 self.command(cmd)
         except TncError:
             self.close()
@@ -149,6 +152,8 @@ class MercuryTnc:
         if line.startswith("CONNECTED"):
             parts = line.split()
             self.connected = True
+            self.link_source = parts[1].upper() if len(parts) > 1 else ""
+            self.link_dest = parts[2].upper() if len(parts) > 2 else ""
             self.events.put(("connected", parts[2] if len(parts) > 2 else ""))
         elif line == "DISCONNECTED":
             self.connected = False

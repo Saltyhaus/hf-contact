@@ -11,13 +11,15 @@ import os
 import queue
 import sys
 import threading
+import time
 import webbrowser
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from . import __version__
+from . import echo_service as es
 from . import mercury_version as mv
 from . import status as station_status
 from .session import MAX_MESSAGE, compose_message, echo_summary, run_session, valid_call
@@ -45,7 +47,10 @@ class Store:
         self.settings_path = self.dir / "settings.json"
         self.history_path = self.dir / "history.json"
         self.settings = {"mycall": "", "grid": "", "name": "", "host": "127.0.0.1", "port": 8300,
-                         "station": dict(DEFAULT_STATION), "status_url": station_status.DEFAULT_URL}
+                         "station": dict(DEFAULT_STATION), "status_url": station_status.DEFAULT_URL,
+                         # echo service (never starts by itself: the switch is always off at launch)
+                         "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
+                         "echo_rules_ok": False}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -73,6 +78,10 @@ class App:
         self.events = queue.Queue()
         self.cancel = None
         self.busy = False
+        self.svc = None                 # the running EchoService, if any
+        self.svc_token = None
+        self.svc_retry_at = 0
+        self.svc_state = "off"
         root.title("HF Contact")
         root.configure(bg=BG)
         root.minsize(420, 560)
@@ -82,6 +91,7 @@ class App:
         self._render_history()
         self.root.after(150, self._pump)
         self.root.after(300, self._refresh_live)
+        self.root.after(1000, self._svc_tick)
         root.protocol("WM_DELETE_WINDOW", self._quit)
 
     # ------------------------------------------------------------ look
@@ -112,7 +122,19 @@ class App:
                foreground=[("disabled", GRAY)])
         st.configure("Stop.TButton", background="#b71c1c", foreground="white")
         st.map("Stop.TButton", background=[("pressed", "#7f1010"), ("active", "#d32626")])
+        st.configure("Card.TCheckbutton", background=PANEL, foreground=FG, font=("TkDefaultFont", 10, "bold"),
+                     indicatorbackground=FIELD, indicatorforeground=TEAL)
+        st.map("Card.TCheckbutton", background=[("active", PANEL)],
+               indicatorbackground=[("selected", "#009a9a"), ("active", "#262d33")],
+               indicatorforeground=[("selected", "white")])
         st.configure("Link.TButton", background=PANEL, foreground=TEAL, padding=(6, 2))
+        st.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
+               selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)],
+               background=[("readonly", "#262d33")], arrowcolor=[("readonly", FG)])
+        st.map("TRadiobutton", background=[("active", BG)], indicatorbackground=[("selected", "#009a9a")])
+        for opt, val in (("background", FIELD), ("foreground", FG), ("selectBackground", "#009a9a"),
+                         ("selectForeground", "white")):
+            self.root.option_add(f"*TCombobox*Listbox.{opt}", val)
         st.map("Link.TButton", background=[("active", "#262d33")])
 
     def _build(self):
@@ -195,6 +217,17 @@ class App:
                               "and anyone can read it.", style="Dim.TLabel", wraplength=520,
                   justify="left").pack(anchor="w", pady=(2, 0), **pad)
 
+        # your own echo service
+        svc = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
+        svc.pack(fill="x", pady=(10, 0), **pad)
+        self.svc_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(svc, text="Run an echo service", variable=self.svc_var, style="Card.TCheckbutton",
+                        command=self._svc_toggle).pack(anchor="w")
+        self.svc_lbl = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=500, justify="left")
+        self.svc_lbl.pack(anchor="w", pady=(2, 0))
+        self.svc_warn = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=500, justify="left")
+        self._svc_show("off")
+
         # status
         st = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
         st.pack(fill="x", pady=(10, 6), **pad)
@@ -215,7 +248,8 @@ class App:
         self.hist = tk.Text(outer, height=10, wrap="word", bg=FIELD, fg=FG, relief="flat",
                             highlightthickness=0, padx=8, pady=6, state="disabled", font=("TkDefaultFont", 10))
         self.hist.pack(fill="both", expand=True, pady=(2, 0), **pad)
-        for tag, color in (("when", DIM), ("echo", TEAL), ("reply", GREEN), ("sent", ORANGE), ("err", RED)):
+        for tag, color in (("when", DIM), ("echo", TEAL), ("reply", GREEN), ("sent", ORANGE), ("err", RED),
+                           ("service", TEAL)):
             self.hist.tag_configure(tag, foreground=color)
         self.modem_log = tk.Text(outer, height=7, wrap="none", bg=FIELD, fg=DIM, relief="flat",
                                  highlightthickness=0, padx=8, pady=6, state="disabled",
@@ -259,7 +293,8 @@ class App:
         self._write_history(when, kind, text)
 
     def _write_history(self, when, kind, text):
-        label = {"echo": "ECHO", "reply": "REPLY", "sent": "SENT", "err": "PROBLEM"}.get(kind, kind.upper())
+        label = {"echo": "ECHO", "reply": "REPLY", "sent": "SENT", "err": "PROBLEM",
+                 "service": "ECHO SERVICE"}.get(kind, kind.upper())
         self.hist.configure(state="normal")
         # newest on top: insert the pieces at the start, last piece first
         self.hist.insert("1.0", f"{text}\n\n")
@@ -365,9 +400,16 @@ class App:
             self._start(cfg, message=msg, typed=text)
 
     def _start(self, cfg, echo=False, message=None, typed=None):
-        if self.busy or not self._go_anyway():
+        if self.busy:
+            return
+        if self.svc and self.svc.linked_with:
+            messagebox.showinfo("HF Contact", f"{self.svc.linked_with} is linked to your echo service right "
+                                f"now. Try again when they're done (a minute or two at most).")
+            return
+        if not self._go_anyway():
             return
         self.busy = True
+        svc = self._svc_stop("paused")      # one program on Mercury at a time
         self.cancel = threading.Event()
         for b in (self.echo_btn, self.check_btn, self.send_btn):
             b.state(["disabled"])
@@ -377,6 +419,8 @@ class App:
         self._pending_typed = typed
 
         def work():
+            if svc:
+                svc.join(15)                 # let it hang up and let go of Mercury
             r = run_session(cfg, echo=echo, message=message, cancel=self.cancel,
                             progress=lambda k, t: self.events.put((k, t)))
             self.events.put(("done", r))
@@ -409,12 +453,15 @@ class App:
                     self._show_version()
                 elif kind == "done":
                     self._done(val)
+                elif kind.startswith("svc-"):
+                    self._svc_event(kind, val)
         except queue.Empty:
             pass
         self.root.after(150, self._pump)
 
     def _done(self, r):
         self.busy = False
+        self.root.after(500, self._svc_tick)    # back to listening, if it's on
         threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(
             self.store.settings.get("status_url", "")))), daemon=True).start()
         for b in (self.echo_btn, self.check_btn, self.send_btn):
@@ -449,6 +496,141 @@ class App:
                 got.append("message delivered")
             self.status_lbl.configure(text="Done -- " + (", ".join(got) if got else "nothing waiting for you"))
 
+    # ------------------------------------------------------------ echo service
+
+    def _svc_cfg(self):
+        s = self.store.settings
+        return {"mycall": s["mycall"], "host": s.get("host", "127.0.0.1"), "port": int(s.get("port", 8300))}
+
+    def _svc_toggle(self):
+        if not self.svc_var.get():
+            self._svc_stop("off")
+            return
+        s = self.store.settings
+        call = self.call_var.get().strip().upper() or s.get("mycall", "")
+        if not valid_call(call):
+            call = (simpledialog.askstring("Echo service", "Your callsign (the service answers calls to it):",
+                                           parent=self.root) or "").strip().upper()
+            if not valid_call(call):
+                if call:
+                    messagebox.showwarning("Echo service", "That isn't a callsign (letters and digits, "
+                                           "optional -SSID).")
+                self.svc_var.set(False)
+                return
+            self.call_var.set(call)
+        s["mycall"] = call
+        if not s.get("echo_rules_ok"):
+            ok = messagebox.askokcancel("Echo service", (
+                "With the echo service on, Mercury answers calls to " + call + " and sends echo replies "
+                "by itself, with nobody at the radio.\n\n"
+                "In the US that's automatic control (47 CFR 97.221): General class or higher, and inside "
+                "the automatic-control data segments, or with someone monitoring.\n\n" + es.SEGMENT_NOTE +
+                "\n\nIt only answers echo tests. Messages people send are ignored and never kept.\n\n"
+                "Turn it on?"))
+            if not ok:
+                self.svc_var.set(False)
+                return
+            s["echo_rules_ok"] = True
+        self.store.save()
+        ok, text = es.segment_check(es.parse_mhz(s.get("echo_dial", "")))
+        if ok is False:
+            messagebox.showwarning("Echo service", text)
+        self.svc_retry_at = 0
+        self._svc_tick(reschedule=False)
+
+    def _svc_tick(self, reschedule=True):
+        """Start or stop the service to match the switch, the hours and
+        whether we're making a call of our own."""
+        s = self.store.settings
+        want = self.svc_var.get() and not self.busy
+        in_hours = es.in_schedule(s)
+        running = self.svc and self.svc.running
+        if want and in_hours and not running:
+            if time.time() >= self.svc_retry_at:
+                token = self.svc_token = object()     # events from an older run are told apart by this
+                self.svc = es.EchoService(self._svc_cfg(),
+                                          progress=lambda k, v, t=token: self.events.put((k, (t, v))))
+                self.svc.start()
+                self._svc_show("starting")
+        elif want and not in_hours:
+            if running:
+                self._svc_stop("waiting")
+            else:
+                self._svc_show("waiting")
+        elif not self.svc_var.get() and running:
+            self._svc_stop("off")
+        if reschedule:
+            self.root.after(30000, self._svc_tick)
+
+    def _svc_stop(self, state):
+        """Stop the service (it hangs up on a caller first). Returns it, so
+        the caller can wait for Mercury to be free."""
+        svc, self.svc = self.svc, None
+        if svc:
+            svc.stop()
+        self._svc_show(state if self.svc_var.get() else "off")
+        return svc
+
+    def _svc_event(self, kind, tagged):
+        token, val = tagged
+        current = token is self.svc_token and self.svc is not None
+        if kind in ("svc-status", "svc-linked", "svc-unlinked", "svc-error") and not current:
+            return                  # a run we already stopped, still winding down
+        if kind == "svc-line":
+            self._modem_line("[echo service] " + val)
+        elif kind == "svc-status":
+            self._svc_show("listening")
+        elif kind == "svc-linked":
+            self._svc_show("linked", val)
+        elif kind == "svc-unlinked":
+            self._svc_show("listening")
+        elif kind == "svc-echo":
+            snr = f"SNR {val['snr']:+.1f} dB" if val["snr"] is not None else "SNR not reported"
+            bps = f"{val['bps']} bps" if val["bps"] else "speed not reported"
+            self._add_history("service", f"Answered an echo test from {val['call']}: heard them {snr}, {bps}.")
+        elif kind == "svc-ignored":
+            self._add_history("service", f"{val} sent a message. Not kept (echo service only); they were told.")
+        elif kind == "svc-refused":
+            self._add_history("service", f"Hung up on {val}: over {es.LINKS_PER_HOUR} calls this hour.")
+        elif kind == "svc-error":
+            if self.svc_var.get() and not self.busy:
+                self.svc_retry_at = time.time() + 60
+                self._svc_show("error", val)
+        elif kind == "svc-stopped":
+            if current:
+                self.svc = None
+                if self.svc_state != "error":
+                    self._svc_show("off")
+                    self.svc_var.set(False)
+
+    def _svc_show(self, state, detail=""):
+        self.svc_state = state
+        s = self.store.settings
+        call = s.get("mycall") or "your callsign"
+        when = es.describe_schedule(s)
+        text, color = {
+            "off": (f"Off. When on, Mercury answers echo tests to {call} by itself, so others can check "
+                    f"their signal. Messages are never kept.", DIM),
+            "starting": ("Opening Mercury…", DIM),
+            "listening": (f"On: listening for calls to {call} ({when}).", GREEN),
+            "linked": (f"{detail} is linked: answering their echo test…", TEAL),
+            "waiting": (f"On, outside its hours ({when}). Mercury is left alone until then.", DIM),
+            "paused": ("Paused for your call. It goes back to listening when you're done.", ORANGE),
+            "error": (f"Couldn't listen: {detail} Trying again in a minute.", RED),
+        }[state]
+        self.svc_lbl.configure(text=text, foreground=color)
+        if self.svc_var.get():
+            ok, warn = es.segment_check(es.parse_mhz(s.get("echo_dial", "")))
+            if ok is None:
+                warn, wcolor = ("Set your dial frequency in Settings to check it against the US "
+                                "automatic-control segments.", DIM)
+            else:
+                wcolor = GREEN if ok else ORANGE
+            self.svc_warn.configure(text=warn, foreground=wcolor)
+            self.svc_warn.pack(anchor="w", pady=(2, 0))
+        else:
+            self.svc_warn.pack_forget()
+
     # ------------------------------------------------------------ settings
 
     def _settings(self):
@@ -475,6 +657,42 @@ class App:
                   style="Dim.TLabel", wraplength=380).grid(row=len(fields), column=0, columnspan=2, sticky="w",
                                                           pady=(6, 10))
 
+        # echo service
+        eb = ttk.Frame(frm)
+        eb.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="we", pady=(4, 10))
+        ttk.Label(eb, text="ECHO SERVICE", style="Dim.TLabel", font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
+        sched = tk.StringVar(value=s.get("echo_schedule", "always"))
+        hrs = [f"{h:02d}:00" for h in range(24)]
+        from_v = tk.StringVar(value=hrs[int(s.get("echo_from", 18)) % 24])
+        to_v = tk.StringVar(value=hrs[int(s.get("echo_to", 22)) % 24])
+        row1 = ttk.Frame(eb)
+        row1.pack(anchor="w", pady=(4, 0))
+        ttk.Radiobutton(row1, text="All the time", value="always", variable=sched).pack(side="left")
+        row2 = ttk.Frame(eb)
+        row2.pack(anchor="w", pady=(2, 0))
+        ttk.Radiobutton(row2, text="Between", value="hours", variable=sched).pack(side="left")
+        ttk.Combobox(row2, textvariable=from_v, values=hrs, width=6, state="readonly").pack(side="left", padx=4)
+        ttk.Label(row2, text="and").pack(side="left")
+        ttk.Combobox(row2, textvariable=to_v, values=hrs, width=6, state="readonly").pack(side="left", padx=4)
+        ttk.Label(row2, text="(this computer's time)", style="Dim.TLabel").pack(side="left")
+        row3 = ttk.Frame(eb)
+        row3.pack(anchor="w", fill="x", pady=(6, 0))
+        ttk.Label(row3, text="Your dial frequency, MHz (USB)", style="Dim.TLabel").pack(side="left")
+        dial_v = tk.StringVar(value=s.get("echo_dial", ""))
+        ttk.Entry(row3, textvariable=dial_v, width=12).pack(side="left", padx=8)
+        check = ttk.Label(eb, text="", style="Dim.TLabel", wraplength=420, justify="left")
+        check.pack(anchor="w", pady=(4, 0))
+        ttk.Label(eb, text=es.SEGMENT_NOTE + " Your radio isn't tuned by HF Contact: this is only checked.",
+                  style="Dim.TLabel", wraplength=420, justify="left").pack(anchor="w", pady=(4, 0))
+
+        def check_dial(*_):
+            ok, text = es.segment_check(es.parse_mhz(dial_v.get()))
+            if ok is None and dial_v.get().strip():
+                text, ok = "Not a frequency I can read (try 14.105).", False
+            check.configure(text=text, foreground={True: GREEN, False: ORANGE}.get(ok, DIM))
+        dial_v.trace_add("write", check_dial)
+        check_dial()
+
         def save():
             call = vars_["call"].get().strip().upper()
             if not valid_call(call):
@@ -489,7 +707,12 @@ class App:
             s["host"] = vars_["host"].get().strip() or "127.0.0.1"
             s["port"] = port
             s["status_url"] = vars_["status_url"].get().strip()
+            s["echo_schedule"] = sched.get()
+            s["echo_from"], s["echo_to"] = int(from_v.get()[:2]), int(to_v.get()[:2])
+            s["echo_dial"] = dial_v.get().strip()
             self.store.save()
+            self._svc_show(self.svc_state)
+            self._svc_tick(reschedule=False)
             self._show_station()
             win.destroy()
             self._show_live(None)
@@ -504,23 +727,44 @@ class App:
             vars_["status_url"].set(station_status.DEFAULT_URL)
 
         btns = ttk.Frame(frm)
-        btns.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e")
+        btns.grid(row=len(fields) + 2, column=0, columnspan=2, sticky="e")
         ttk.Button(btns, text="Defaults", command=reset).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Save", style="Go.TButton", command=save).pack(side="left")
         ttk.Label(frm, text=f"HF Contact {__version__}", style="Dim.TLabel").grid(
-            row=len(fields) + 2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            row=len(fields) + 3, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
     def _quit(self):
         if self.busy and not messagebox.askyesno("HF Contact", "A call is in progress. Hang up and quit?"):
             return
         if self.cancel:
             self.cancel.set()
+        svc = self._svc_stop("off")
+        if svc:
+            svc.join(12)                     # hang up on a caller properly before we go
         self.root.destroy()
 
 
+def resource(name):
+    """A file shipped with the app: next to the package, or inside the .exe."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base / "assets" / name
+
+
+def set_icon(root):
+    try:
+        img = tk.PhotoImage(file=str(resource("icon.png")))
+        root.iconphoto(True, img)
+        root._icon = img                     # keep a reference, or Tk drops it
+    except (tk.TclError, OSError):
+        pass
+
+
 def main():
-    root = tk.Tk()
+    # className sets the window's WM_CLASS ("hf-contact" / "Hf-contact"), which
+    # the desktop file's StartupWMClass matches, so the dock shows our icon
+    root = tk.Tk(className="hf-contact")
+    set_icon(root)
     try:
         root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 72.0))
     except tk.TclError:
