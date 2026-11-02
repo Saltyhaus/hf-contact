@@ -17,6 +17,8 @@ python3 -c "import tkinter" 2>/dev/null || {
 
 mkdir -p "$APPS" "$ICONS"
 cp "$HERE/assets/icon.png" "$ICONS/hf-contact.png"
+# Icon is the PNG's full path: an icon name only shows up after GNOME rescans
+# its icon folders (often not until the next login).
 # StartupWMClass matches the window (Tk className "hf-contact"), so the dock
 # groups it under this entry and shows the icon
 cat > "$APPS/hf-contact.desktop" <<DESKTOP
@@ -26,7 +28,7 @@ Name=HF Contact
 Comment=Echo test and short messages over HF, through Mercury
 Exec=python3 "$HERE/hf-contact.py"
 Path=$HERE
-Icon=hf-contact
+Icon=$HERE/assets/icon.png
 Terminal=false
 Categories=HamRadio;Network;
 StartupWMClass=Hf-contact

@@ -16,9 +16,14 @@ import webbrowser
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from datetime import timezone
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import __version__
+from . import adif
+from . import notify
+from . import rig
+from . import stations as station_list
 from . import echo_service as es
 from . import mercury_version as mv
 from . import status as station_status
@@ -50,7 +55,8 @@ class Store:
                          "station": dict(DEFAULT_STATION), "status_url": station_status.DEFAULT_URL,
                          # echo service (never starts by itself: the switch is always off at launch)
                          "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
-                         "echo_rules_ok": False, "echo_listening": False}
+                         "echo_rules_ok": False, "echo_listening": False,
+                         "echo_notify": True, "rig_addr": "", "stations_url": station_list.DEFAULT_URL}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -82,6 +88,8 @@ class App:
         self.svc_token = None
         self.svc_retry_at = 0
         self.svc_state = "off"
+        self.rig_mhz = None             # the dial as rigctld reports it, when set up
+        self.stations = []              # the published station list, when there's internet
         root.title("HF Contact")
         root.configure(bg=BG)
         root.minsize(420, 560)
@@ -92,6 +100,7 @@ class App:
         self.root.after(150, self._pump)
         self.root.after(300, self._refresh_live)
         self.root.after(1000, self._svc_tick)
+        self._fetch_stations()
         if self.store.settings.get("echo_listening"):
             self._svc_cleanup()
         root.protocol("WM_DELETE_WINDOW", self._quit)
@@ -130,10 +139,12 @@ class App:
                indicatorbackground=[("selected", "#009a9a"), ("active", "#262d33")],
                indicatorforeground=[("selected", "white")])
         st.configure("Link.TButton", background=PANEL, foreground=TEAL, padding=(6, 2))
+        st.configure("TCombobox", background="#262d33", arrowcolor=FG)
         st.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
                selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)],
                background=[("readonly", "#262d33")], arrowcolor=[("readonly", FG)])
         st.map("TRadiobutton", background=[("active", BG)], indicatorbackground=[("selected", "#009a9a")])
+        st.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", "#009a9a")])
         for opt, val in (("background", FIELD), ("foreground", FG), ("selectBackground", "#009a9a"),
                          ("selectForeground", "white")):
             self.root.option_add(f"*TCombobox*Listbox.{opt}", val)
@@ -247,6 +258,7 @@ class App:
         ttk.Label(hist_head, text="History", style="Dim.TLabel").pack(side="left")
         self.log_btn = ttk.Button(hist_head, text="Modem log", style="Link.TButton", command=self._toggle_log)
         self.log_btn.pack(side="right")
+        ttk.Button(hist_head, text="Export ADIF…", style="Link.TButton", command=self._export_adif).pack(side="right")
         self.hist = tk.Text(outer, height=10, wrap="word", bg=FIELD, fg=FG, relief="flat",
                             highlightthickness=0, padx=8, pady=6, state="disabled", font=("TkDefaultFont", 10))
         self.hist.pack(fill="both", expand=True, pady=(2, 0), **pad)
@@ -287,10 +299,13 @@ class App:
     def _set_light(self, color):
         self.light.itemconfigure(self.dot, fill=color)
 
-    def _add_history(self, kind, text, save=True):
+    def _add_history(self, kind, text, save=True, qso=None):
         when = datetime.now().strftime("%Y-%m-%d %H:%M")
         if save:
-            self.store.history.append({"when": when, "kind": kind, "text": text})
+            entry = {"when": when, "kind": kind, "text": text}
+            if qso:
+                entry["qso"] = qso          # for the ADIF export
+            self.store.history.append(entry)
             self.store.save()
         self._write_history(when, kind, text)
 
@@ -419,6 +434,7 @@ class App:
         self.signal_lbl.configure(text="")
         self._set_light(ORANGE)
         self._pending_typed = typed
+        self._pending_cfg = cfg
 
         def work():
             if svc:
@@ -455,6 +471,12 @@ class App:
                     self._show_version()
                 elif kind == "done":
                     self._done(val)
+                elif kind == "stations":
+                    self.stations = val or self.stations
+                elif kind == "rig":
+                    if val != self.rig_mhz:
+                        self.rig_mhz = val
+                        self._svc_show(self.svc_state)
                 elif kind.startswith("svc-"):
                     self._svc_event(kind, val)
         except queue.Empty:
@@ -476,15 +498,20 @@ class App:
             heard.append(f"{r.bitrate} bps")
         self.signal_lbl.configure(text=" · ".join(heard))
 
+        contact = [self._session_qso(r)] if r.linked else [None]
+
+        def add(kind, text):                    # the call's contact goes on its first History entry
+            self._add_history(kind, text, qso=contact[0])
+            contact[0] = None
         if r.echo_reply:
-            self._add_history("echo", r.echo_reply)
+            add("echo", r.echo_reply)
         if r.message_sent and r.linked and not r.error:
-            self._add_history("sent", self._pending_typed or "(message)")
+            add("sent", self._pending_typed or "(message)")
             self.msg.delete("1.0", "end")
         for name, body in r.replies:
-            self._add_history("reply", body)
+            add("reply", body)
         if r.error:
-            self._add_history("err", r.error)
+            add("err", r.error)
             self._set_light(RED)
             self.status_lbl.configure(text="Didn't work -- see History")
         else:
@@ -534,7 +561,7 @@ class App:
                 return
             s["echo_rules_ok"] = True
         self.store.save()
-        ok, text = es.segment_check(es.parse_mhz(s.get("echo_dial", "")))
+        ok, text = es.segment_check(self._svc_dial())
         if ok is False:
             messagebox.showwarning("Echo service", text)
         self.svc_retry_at = 0
@@ -562,6 +589,8 @@ class App:
                 self._svc_show("waiting")
         elif not self.svc_var.get() and running:
             self._svc_stop("off")
+        if self.svc_var.get():
+            self._read_rig()
         if reschedule:
             self.root.after(30000, self._svc_tick)
 
@@ -596,7 +625,16 @@ class App:
         elif kind == "svc-echo":
             snr = f"SNR {val['snr']:+.1f} dB" if val["snr"] is not None else "SNR not reported"
             bps = f"{val['bps']} bps" if val["bps"] else "speed not reported"
-            self._add_history("service", f"Answered an echo test from {val['call']}: heard them {snr}, {bps}.")
+            text = f"Answered an echo test from {val['call']}: heard them {snr}, {bps}."
+            s = self.store.settings
+            self._add_history("service", text, qso=adif.qso(
+                val["call"], s["mycall"], mhz=self._svc_dial(),
+                grid=self.grid_var.get().strip().upper() or s.get("grid", ""),
+                comment=f"answered their echo test, heard them {snr}, {bps}"))
+            if s.get("echo_notify", True):
+                notify.notify("HF Contact: echo test answered",
+                              f"{val['call']} tested against your station. You heard them {snr}, {bps}.",
+                              icon=str(resource("icon.png")))
         elif kind == "svc-ignored":
             self._add_history("service", f"{val} sent a message. Not kept (echo service only); they were told.")
         elif kind == "svc-refused":
@@ -612,6 +650,20 @@ class App:
                 if self.svc_state != "error":
                     self._svc_show("off")
                     self.svc_var.set(False)
+
+    def _svc_dial(self):
+        """The dial frequency for the segment check: the radio's own reading
+        (rigctld) when there is one, otherwise what Settings says."""
+        if self.rig_mhz is not None:
+            return self.rig_mhz
+        return es.parse_mhz(self.store.settings.get("echo_dial", ""))
+
+    def _read_rig(self):
+        addr = self.store.settings.get("rig_addr", "")
+        if not addr:
+            self.events.put(("rig", None))
+            return
+        threading.Thread(target=lambda: self.events.put(("rig", rig.read_mhz(addr))), daemon=True).start()
 
     def _svc_mark(self, listening):
         """Remember on disk whether a service has Mercury listening, so a
@@ -645,18 +697,58 @@ class App:
         }[state]
         self.svc_lbl.configure(text=text, foreground=color)
         if self.svc_var.get():
-            ok, warn = es.segment_check(es.parse_mhz(s.get("echo_dial", "")))
+            ok, warn = es.segment_check(self._svc_dial())
             if ok is None:
                 warn, wcolor = ("Set your dial frequency in Settings to check it against the US "
                                 "automatic-control segments.", DIM)
             else:
                 wcolor = GREEN if ok else ORANGE
+                if self.rig_mhz is not None:
+                    warn = f"Radio reads {self.rig_mhz:.4f} MHz. " + warn
             self.svc_warn.configure(text=warn, foreground=wcolor)
             self.svc_warn.pack(anchor="w", pady=(2, 0))
         else:
             self.svc_warn.pack_forget()
 
     # ------------------------------------------------------------ settings
+
+    def _session_qso(self, r):
+        cfg = self._pending_cfg
+        notes = []
+        if r.echo_reply:
+            notes.append(f"echo test, they heard me {echo_summary(r.echo_reply) or 'fine'}")
+        if r.heard_snr is not None:
+            notes.append(f"I heard them SNR {r.heard_snr:+.1f} dB")
+        if r.message_sent and not r.error:
+            notes.append("message sent")
+        if r.replies:
+            notes.append(f"{len(r.replies)} repl{'y' if len(r.replies) == 1 else 'ies'} received")
+        mhz = es.parse_mhz(self.store.settings["station"].get("freq", ""))
+        return adif.qso(cfg["target"], cfg["mycall"], mhz=mhz, grid=cfg.get("grid", ""), comment="; ".join(notes))
+
+    def _export_adif(self):
+        text, n = adif.export(self.store.history)
+        if not n:
+            messagebox.showinfo("Export ADIF", "No contacts in History to export yet. (History from before "
+                                "version 0.5.0 doesn't record them.)")
+            return
+        path = filedialog.asksaveasfilename(parent=self.root, title="Export ADIF",
+                                            defaultextension=".adi", initialfile="hf-contact.adi",
+                                            filetypes=[("ADIF", "*.adi"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+        except OSError as e:
+            messagebox.showwarning("Export ADIF", f"Couldn't save it: {e}")
+            return
+        messagebox.showinfo("Export ADIF", f"Saved {n} contact{'' if n == 1 else 's'} to {path}.\n\n"
+                            f"Logged as mode DYNAMIC (ADIF has no Mercury mode yet), with Mercury in the comment.")
+
+    def _fetch_stations(self):
+        url = self.store.settings.get("stations_url", "")
+        threading.Thread(target=lambda: self.events.put(("stations", station_list.fetch(url))),
+                         daemon=True).start()
 
     def _settings(self):
         s = self.store.settings
@@ -671,12 +763,27 @@ class App:
                   ("Note (shown only)", "note", s["station"].get("note", "")),
                   ("Mercury address", "host", s.get("host", "127.0.0.1")),
                   ("Mercury TNC port", "port", str(s.get("port", 8300))),
-                  ("Live status URL (optional)", "status_url", s.get("status_url", ""))]
+                  ("Live status URL (optional)", "status_url", s.get("status_url", "")),
+                  ("Station list URL (optional)", "stations_url", s.get("stations_url", ""))]
         vars_ = {}
+        picks = {station_list.label(st): st for st in self.stations}
         for i, (label, key, val) in enumerate(fields):
             ttk.Label(frm, text=label, style="Dim.TLabel").grid(row=i, column=0, sticky="w", pady=4, padx=(0, 10))
             v = tk.StringVar(value=val)
-            ttk.Entry(frm, textvariable=v, width=32).grid(row=i, column=1, sticky="we", pady=4)
+            if key == "call" and picks:
+                # pick from the published list, or type any call
+                box = ttk.Combobox(frm, textvariable=v, values=list(picks), width=30)
+                box.grid(row=i, column=1, sticky="we", pady=4)
+
+                def picked(_e=None, v=v):
+                    st = picks.get(v.get())
+                    if st:
+                        for k, val2 in station_list.as_settings(st).items():
+                            if k != "status_url" or val2:
+                                vars_[k].set(val2)
+                box.bind("<<ComboboxSelected>>", picked)
+            else:
+                ttk.Entry(frm, textvariable=v, width=32).grid(row=i, column=1, sticky="we", pady=4)
             vars_[key] = v
         ttk.Label(frm, text="Mercury's TNC port is usually 8300 (the data port is the next one up).",
                   style="Dim.TLabel", wraplength=380).grid(row=len(fields), column=0, columnspan=2, sticky="w",
@@ -705,8 +812,16 @@ class App:
         ttk.Label(row3, text="Your dial frequency, MHz (USB)", style="Dim.TLabel").pack(side="left")
         dial_v = tk.StringVar(value=s.get("echo_dial", ""))
         ttk.Entry(row3, textvariable=dial_v, width=12).pack(side="left", padx=8)
+        row4 = ttk.Frame(eb)
+        row4.pack(anchor="w", fill="x", pady=(6, 0))
+        ttk.Label(row4, text="Or read it from rigctld (host:port)", style="Dim.TLabel").pack(side="left")
+        rig_v = tk.StringVar(value=s.get("rig_addr", ""))
+        ttk.Entry(row4, textvariable=rig_v, width=16).pack(side="left", padx=8)
         check = ttk.Label(eb, text="", style="Dim.TLabel", wraplength=420, justify="left")
         check.pack(anchor="w", pady=(4, 0))
+        notify_v = tk.BooleanVar(value=s.get("echo_notify", True))
+        ttk.Checkbutton(eb, text="Pop up a notice when someone tests against me", variable=notify_v).pack(
+            anchor="w", pady=(6, 0))
         ttk.Label(eb, text=es.SEGMENT_NOTE + " Your radio isn't tuned by HF Contact: this is only checked.",
                   style="Dim.TLabel", wraplength=420, justify="left").pack(anchor="w", pady=(4, 0))
 
@@ -714,8 +829,12 @@ class App:
             ok, text = es.segment_check(es.parse_mhz(dial_v.get()))
             if ok is None and dial_v.get().strip():
                 text, ok = "Not a frequency I can read (try 14.105).", False
+            elif self.rig_mhz is not None and rig_v.get().strip():
+                ok, text = es.segment_check(self.rig_mhz)
+                text = f"Radio reads {self.rig_mhz:.4f} MHz. " + text
             check.configure(text=text, foreground={True: GREEN, False: ORANGE}.get(ok, DIM))
         dial_v.trace_add("write", check_dial)
+        rig_v.trace_add("write", check_dial)
         check_dial()
 
         def save():
@@ -735,7 +854,12 @@ class App:
             s["echo_schedule"] = sched.get()
             s["echo_from"], s["echo_to"] = int(from_v.get()[:2]), int(to_v.get()[:2])
             s["echo_dial"] = dial_v.get().strip()
+            s["rig_addr"] = rig_v.get().strip()
+            s["echo_notify"] = bool(notify_v.get())
+            s["stations_url"] = vars_["stations_url"].get().strip()
             self.store.save()
+            self.rig_mhz = None
+            self._fetch_stations()
             self._svc_show(self.svc_state)
             self._svc_tick(reschedule=False)
             self._show_station()
@@ -750,6 +874,7 @@ class App:
             vars_["host"].set("127.0.0.1")
             vars_["port"].set("8300")
             vars_["status_url"].set(station_status.DEFAULT_URL)
+            vars_["stations_url"].set(station_list.DEFAULT_URL)
 
         btns = ttk.Frame(frm)
         btns.grid(row=len(fields) + 2, column=0, columnspan=2, sticky="e")

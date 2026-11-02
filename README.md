@@ -64,7 +64,7 @@ Tick **Run an echo service** and your Mercury answers calls to your callsign by 
 - **Limits**, so an unattended station can't be kept on the air: 3 echo replies per call, a call is hung up after 3 minutes or after 60 seconds of nothing, and each caller gets 6 calls an hour.
 - **Your own calls come first.** Press Echo test or Send message and the service pauses, then goes back to listening when you're done.
 - **Hours:** under **Settings**, all the time or between two hours (this computer's time). Outside them, Mercury is left alone. The switch is always off when the app starts.
-- History lists every echo it answered, with the caller's signal.
+- History lists every echo it answered, with the caller's signal, and a desktop notice pops up when someone tests against you (switch it off in Settings). The notice is silent on purpose: on a radio computer the default sound card may be the radio's.
 - **Off means off.** Stopping the service, pausing it or quitting the app tells Mercury to stop answering calls. If the app crashes or the computer loses power while the service is on, Mercury's listening is switched off the next time HF Contact starts.
 
 <img src="docs/echo-service-settings.png" alt="Echo service settings: hours and dial frequency" width="420">
@@ -80,7 +80,20 @@ With the service on, your station transmits with nobody at the radio. In the US 
 
 There are segments on 80, 30, 17, 15, 12 and 10 m too. Mercury's signal sits about 0.35–2.65 kHz above the dial, so the whole of it has to fit inside a segment (14.100 itself is the beacon window, between the two 20 m segments).
 
-Put your dial frequency in **Settings** and the app checks it. Outside a segment you get a warning, not a block: *you are running outside the automatic control segment in the US, must monitor or be in an area that allows.* Other countries have their own rules, and you may be sitting at the radio. HF Contact doesn't tune your radio; it only checks the number you give it.
+Put your dial frequency in **Settings** and the app checks it. Or give it your rigctld address (e.g. `127.0.0.1:4532`) and it reads the dial from the radio every 30 seconds while the service is on, so the check follows the radio if someone retunes it. Outside a segment you get a warning, not a block: *you are running outside the automatic control segment in the US, must monitor or be in an area that allows.* Other countries have their own rules, and you may be sitting at the radio. HF Contact doesn't tune your radio; it only checks the number you give it.
+
+## Station list
+
+If the station you call publishes a list of stations (AG7JC's is `https://ag7jc.com/data/stations.json`), **Settings** offers them in a drop-down: pick one and its call, frequency and notes fill in. Stations running an echo service are marked. You can still type any callsign. No internet: no list, nothing else changes.
+
+```json
+{"stations": [{"call": "AG7JC", "freq_mhz": 14.105, "grid": "DM12", "when": "Most evenings",
+               "echo_service": true, "status_url": "https://ag7jc.com/data/hf-contact.json"}]}
+```
+
+## Log it
+
+**Export ADIF…** above History saves your contacts for a logbook (QLog, Wavelog, Log4OM...): echo tests you ran, calls where a message or reply went through, and echo tests your service answered, with frequency, band, your grid and the signal reports. ADIF has no Mercury mode yet, so they're logged as mode `DYNAMIC` (its mode for adaptive ARQ modems like VARA) with "Mercury" in the comment. History from before 0.5.0 didn't record contacts and isn't exported.
 
 ## Good to know
 
@@ -110,7 +123,7 @@ It uses the same interface as the VARA-style TNC: a text control port (`MYCALL`,
 ## Development
 
 ```
-python3 -m unittest tests.test_session tests.test_mercury_version tests.test_echo_service
+python3 -m unittest tests.test_session tests.test_mercury_version tests.test_echo_service tests.test_extras
 CONNECTOR=/path/to/mercury-connector python3 -m unittest tests.test_end_to_end
 ```
 
