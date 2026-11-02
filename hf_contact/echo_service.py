@@ -141,6 +141,20 @@ def notice_text(mycall):
             f"your message was not kept. 73\n")
 
 
+def listen_off(cfg, timeout=5.0):
+    """Tell Mercury to stop answering calls. For after a crash: a service
+    that died without stopping may have left Mercury listening. True if
+    Mercury took the command, False if it wasn't there or was busy."""
+    tnc = MercuryTnc(cfg.get("host", "127.0.0.1"), cfg.get("port", 8300), timeout=timeout)
+    try:
+        tnc.open(None)                 # sends LISTEN OFF, leaves the callsign alone
+        return True
+    except TncError:
+        return False
+    finally:
+        tnc.close()
+
+
 class EchoService:
     """Listens on the local Mercury until stop(). progress(kind, value)
     is called from the service thread:
@@ -268,6 +282,12 @@ class EchoService:
                         tnc.events.get(timeout=0.5)
                     except queue.Empty:
                         pass
+            # Mercury keeps listening after we let go of it unless told not to,
+            # and would answer callers with nobody serving them
+            try:
+                tnc.command("LISTEN OFF")
+            except TncError:
+                pass
             tnc.close()
 
     def _frame(self, tnc, link, name, payload):

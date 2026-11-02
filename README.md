@@ -65,6 +65,7 @@ Tick **Run an echo service** and your Mercury answers calls to your callsign by 
 - **Your own calls come first.** Press Echo test or Send message and the service pauses, then goes back to listening when you're done.
 - **Hours:** under **Settings**, all the time or between two hours (this computer's time). Outside them, Mercury is left alone. The switch is always off when the app starts.
 - History lists every echo it answered, with the caller's signal.
+- **Off means off.** Stopping the service, pausing it or quitting the app tells Mercury to stop answering calls. If the app crashes or the computer loses power while the service is on, Mercury's listening is switched off the next time HF Contact starts.
 
 <img src="docs/echo-service-settings.png" alt="Echo service settings: hours and dial frequency" width="420">
 

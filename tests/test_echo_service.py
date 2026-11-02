@@ -173,6 +173,28 @@ class OverTheAir(unittest.TestCase):
         while self.air.b.ctl is not None and time.time() < end:
             time.sleep(0.05)
         self.assertIsNone(self.air.b.ctl, "the modem should be free for the app's own calls")
+        self.assertFalse(self.air.b.listen, "Mercury must stop answering calls once the service stops")
+        r = self.call(echo=True)
+        self.assertFalse(r.linked, "nobody should answer after the service stopped")
+
+    def test_listen_off_after_a_crash(self):
+        # a service that died without stopping leaves Mercury listening
+        from hf_contact.echo_service import listen_off
+        from hf_contact.tnc import MercuryTnc
+        tnc = MercuryTnc("127.0.0.1", self.pb)
+        tnc.open("N0CALL", listen=True)
+        tnc.close()                      # no LISTEN OFF: like a crash
+        end = time.time() + 5
+        while self.air.b.ctl is not None and time.time() < end:
+            time.sleep(0.05)
+        self.assertTrue(self.air.b.listen)
+        self.assertTrue(listen_off({"host": "127.0.0.1", "port": self.pb}))
+        self.assertFalse(self.air.b.listen)
+        self.assertEqual(self.air.b.mycall, "N0CALL", "the cleanup leaves the callsign alone")
+
+    def test_listen_off_without_mercury(self):
+        from hf_contact.echo_service import listen_off
+        self.assertFalse(listen_off({"host": "127.0.0.1", "port": 1}, timeout=1))
 
 
 if __name__ == "__main__":

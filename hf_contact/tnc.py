@@ -77,7 +77,8 @@ class MercuryTnc:
                         "mercury-connector...) is probably using it -- close that first.")
         # same setup mercury-connector uses
         try:
-            for cmd in (f"MYCALL {mycall}", "LISTEN ON" if listen else "LISTEN OFF", "PUBLIC OFF", "BW2300", "P2P SESSION", "VERSION"):
+            setup = [f"MYCALL {mycall}"] if mycall else []
+            for cmd in setup + ["LISTEN ON" if listen else "LISTEN OFF", "PUBLIC OFF", "BW2300", "P2P SESSION", "VERSION"]:
                 self.command(cmd)
         except TncError:
             self.close()

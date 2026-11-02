@@ -50,7 +50,7 @@ class Store:
                          "station": dict(DEFAULT_STATION), "status_url": station_status.DEFAULT_URL,
                          # echo service (never starts by itself: the switch is always off at launch)
                          "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
-                         "echo_rules_ok": False}
+                         "echo_rules_ok": False, "echo_listening": False}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -92,6 +92,8 @@ class App:
         self.root.after(150, self._pump)
         self.root.after(300, self._refresh_live)
         self.root.after(1000, self._svc_tick)
+        if self.store.settings.get("echo_listening"):
+            self._svc_cleanup()
         root.protocol("WM_DELETE_WINDOW", self._quit)
 
     # ------------------------------------------------------------ look
@@ -551,6 +553,7 @@ class App:
                 self.svc = es.EchoService(self._svc_cfg(),
                                           progress=lambda k, v, t=token: self.events.put((k, (t, v))))
                 self.svc.start()
+                self._svc_mark(True)
                 self._svc_show("starting")
         elif want and not in_hours:
             if running:
@@ -573,9 +576,15 @@ class App:
 
     def _svc_event(self, kind, tagged):
         token, val = tagged
-        current = token is self.svc_token and self.svc is not None
+        current = token is not None and token is self.svc_token and self.svc is not None
         if kind in ("svc-status", "svc-linked", "svc-unlinked", "svc-error") and not current:
             return                  # a run we already stopped, still winding down
+        if kind == "svc-cleanup":
+            if val:
+                self._svc_mark(False)
+                self._add_history("service", "The echo service didn't shut down properly last time, so Mercury "
+                                  "may have kept answering calls. Its listening is now switched off.")
+            return              # Mercury not running or busy: try again next start
         if kind == "svc-line":
             self._modem_line("[echo service] " + val)
         elif kind == "svc-status":
@@ -597,11 +606,27 @@ class App:
                 self.svc_retry_at = time.time() + 60
                 self._svc_show("error", val)
         elif kind == "svc-stopped":
+            self._svc_mark(bool(self.svc and self.svc.running))
             if current:
                 self.svc = None
                 if self.svc_state != "error":
                     self._svc_show("off")
                     self.svc_var.set(False)
+
+    def _svc_mark(self, listening):
+        """Remember on disk whether a service has Mercury listening, so a
+        crash can be cleaned up at the next start."""
+        if self.store.settings.get("echo_listening") != listening:
+            self.store.settings["echo_listening"] = listening
+            self.store.save()
+
+    def _svc_cleanup(self):
+        """Last run ended with the service still on (crash, power cut, killed):
+        Mercury may still be answering calls by itself. Switch that off."""
+        def work():
+            ok = es.listen_off(self._svc_cfg())
+            self.events.put(("svc-cleanup", (None, ok)))
+        threading.Thread(target=work, daemon=True).start()
 
     def _svc_show(self, state, detail=""):
         self.svc_state = state
@@ -742,6 +767,8 @@ class App:
         svc = self._svc_stop("off")
         if svc:
             svc.join(12)                     # hang up on a caller properly before we go
+            if not svc.running:
+                self._svc_mark(False)
         self.root.destroy()
 
 
