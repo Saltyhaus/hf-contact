@@ -34,16 +34,28 @@ if __name__ == "__main__":
 class LiveStatus(unittest.TestCase):
     def test_describe(self):
         from hf_contact.status import describe
-        base = {"status": "listening", "busy": False, "freq_mhz": 14.105, "mode": "Mercury",
+        base = {"callsign": "AG7JC", "status": "listening", "busy": False, "freq_mhz": 14.105, "mode": "Mercury",
                 "updated": "2026-10-29T11:40:00Z", "echoes": []}
         t = 1793274000   # 2026-10-29T11:40:00Z
         self.assertEqual(describe(base, now=t + 60, call="AG7JC"), ("listening", "AG7JC is listening now on 14.105 MHz"))
-        self.assertEqual(describe(dict(base, busy=True), now=t + 60)[0], "busy")
-        self.assertEqual(describe(dict(base, status="off", freq_mhz=None), now=t + 60)[0], "off")
+        self.assertEqual(describe(dict(base, busy=True), now=t + 60, call="AG7JC")[0], "busy")
+        self.assertEqual(describe(dict(base, status="off", freq_mhz=None), now=t + 60, call="AG7JC")[0], "off")
         self.assertEqual(describe(base, now=t + 3 * 3600, call="AG7JC"),
                          ("off", "AG7JC hasn't checked in since 3 h ago -- probably off the air"))
         self.assertEqual(describe(None)[0], "unknown")
         self.assertEqual(describe({"updated": "yesterday"})[0], "unknown")
+
+    def test_status_only_counts_for_its_own_station(self):
+        from hf_contact.status import belongs_to, describe
+        doc = {"callsign": "AG7JC", "status": "listening", "busy": False, "updated": "2026-10-29T11:40:00Z"}
+        t = 1793274000
+        self.assertTrue(belongs_to(doc, "ag7jc"))
+        self.assertEqual(describe(doc, now=t + 60, call="K1ABC"),
+                         ("unknown", "No live status for K1ABC -- you can still call"))
+        unnamed = dict(doc)
+        del unnamed["callsign"]
+        self.assertFalse(belongs_to(unnamed, "AG7JC"))
+        self.assertEqual(describe(unnamed, now=t + 60, call="AG7JC")[0], "unknown")
 
     def test_fetch_failure_is_none(self):
         from hf_contact.status import fetch

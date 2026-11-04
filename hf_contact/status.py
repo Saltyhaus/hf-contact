@@ -43,12 +43,23 @@ def _parse_iso(text):
         return None
 
 
+def belongs_to(doc, call):
+    """A status file only counts for the station it names: {"callsign": "AG7JC", ...}.
+    Without that, the app could show one station's light and Mercury version
+    under another station's call."""
+    named = doc.get("callsign") if isinstance(doc, dict) else None
+    return isinstance(named, str) and named.strip().upper() == (call or "").strip().upper()
+
+
 def describe(doc, now=None, call="The station"):
     """(state, text): state is listening / busy / off / unknown.
-    doc is the website's hf-contact.json:
-      {"status": "listening"|"off", "busy": bool, "freq_mhz": 14.105, "updated": ISO UTC, ...}"""
+    doc is the station's hf-contact.json:
+      {"callsign": "AG7JC", "status": "listening"|"off", "busy": bool, "freq_mhz": 14.105,
+       "updated": ISO UTC, ...}"""
     if not doc:
         return "unknown", "Live status unavailable (no internet?) -- you can still call"
+    if not belongs_to(doc, call):
+        return "unknown", f"No live status for {call} -- you can still call"
     now = now or time.time()
     updated = _parse_iso(doc.get("updated"))
     if updated is None:

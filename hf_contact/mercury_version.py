@@ -100,20 +100,74 @@ def station_version(doc):
     return v if isinstance(v, str) and PLAIN_RE.fullmatch(v) else None
 
 
+# Which versions connect to each other, from Mercury's release notes:
+# 1.9.20 and later ("2.0" architecture) all connect to each other, and to
+# nothing older. Below that, versions that differ often don't connect (1.9.13
+# and 1.9.21 don't; 1.9.18 and 1.9.19 didn't), so only an exact match is safe.
+COMPAT_FROM = (1, 9, 20)
+RULE = "Mercury 1.9.20 and newer all connect to each other; older versions don't connect to them."
+
+
+def parse(v):
+    m = PLAIN_RE.fullmatch(v or "")
+    return tuple(int(x) for x in v.split(".")) if m else None
+
+
+def compatible(a, b):
+    """True (they connect), False (they don't), or None (can't say: two
+    different versions older than 1.9.20)."""
+    ta, tb = parse(a), parse(b)
+    if not ta or not tb:
+        return None
+    if ta == tb:
+        return True
+    new_a, new_b = ta >= COMPAT_FROM, tb >= COMPAT_FROM
+    if new_a and new_b:
+        return True
+    if new_a != new_b:
+        return False
+    return None
+
+
 def compare(local, station, call="The station"):
     """(kind, text) for the app, or None when there's nothing to say.
     kind: match / mismatch / info. local is a local_version() result."""
     if not station:
         return None                                     # no internet, or the station doesn't publish it
     state, mine = local
-    if state == "ok" and mine == station:
-        return "match", f"Mercury {mine} ✓ same as {call}"
     if state == "ok":
-        return "mismatch", (f"You have Mercury {mine}; {call} runs {station}. Different versions hear each "
-                            f"other but don't connect, so install {station} to call {call}.")
+        ok = compatible(mine, station)
+        if ok and mine == station:
+            return "match", f"Mercury {mine} \u2713 same as {call}"
+        if ok:
+            return "match", f"Mercury {mine} \u2713 connects to {call}'s {station}"
+        if ok is False:
+            newer = station if parse(station) > parse(mine) else mine
+            return "mismatch", (f"You have Mercury {mine}; {call} runs {station}. These don't connect: "
+                                f"{RULE} Install {newer} or newer.")
+        return "mismatch", (f"You have Mercury {mine}; {call} runs {station}. Older versions that differ "
+                            f"often don't connect: install {station} to be sure.")
     if state == "old":
-        return "mismatch", (f"Your Mercury is older than {station} (it doesn't report a version); {call} runs "
-                            f"{station}. Different versions hear each other but don't connect.")
+        # older than 1.9.21 (it doesn't report a version)
+        if parse(station) and parse(station) >= COMPAT_FROM:
+            return "mismatch", (f"Your Mercury is older than 1.9.21 (it doesn't report a version); {call} runs "
+                                f"{station}. Only 1.9.20 of those connects: install {station} or newer.")
+        return "mismatch", (f"Your Mercury is older than 1.9.21 (it doesn't report a version); {call} runs "
+                            f"{station}. Older versions that differ often don't connect.")
     if state == "not-running":
         return "info", f"{call} runs Mercury {station}. Start Mercury and yours is checked too."
-    return "info", f"{call} runs Mercury {station}; make sure yours is the same."
+    return "info", f"{call} runs Mercury {station}; {RULE}"
+
+
+def reminder(local, call="the station"):
+    """For a station that doesn't publish its version: what we know about
+    ours, and the rule that matters."""
+    state, mine = local
+    if state == "ok" and parse(mine) >= COMPAT_FROM:
+        return f"Your Mercury is {mine}. {call} needs 1.9.20 or newer to connect."
+    if state == "ok":
+        return (f"Your Mercury is {mine}, older than 1.9.20: it only connects to stations on the same version. "
+                f"Most now run 1.9.20 or newer.")
+    if state == "old":
+        return f"Your Mercury is older than 1.9.21. {RULE}"
+    return f"Make sure you and {call} run compatible Mercury versions: {RULE}"

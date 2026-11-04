@@ -72,6 +72,14 @@ class Compare(unittest.TestCase):
                     {}, None, "x"):
             self.assertIsNone(mv.station_version(bad), repr(bad))
 
+    def test_compatible(self):
+        self.assertTrue(mv.compatible("1.9.21", "1.9.22"))
+        self.assertTrue(mv.compatible("1.9.13", "1.9.13"))
+        self.assertFalse(mv.compatible("1.9.19", "1.9.20"))
+        self.assertFalse(mv.compatible("1.9.22", "1.9.13"))
+        self.assertIsNone(mv.compatible("1.9.18", "1.9.19"))
+        self.assertIsNone(mv.compatible("1.9.21", "junk"))
+
     def test_messages(self):
         self.assertIsNone(mv.compare(("ok", "1.9.21"), None))                     # no internet: say nothing
         self.assertEqual(mv.compare(("ok", "1.9.21"), "1.9.21", "AG7JC"),
@@ -80,7 +88,14 @@ class Compare(unittest.TestCase):
         self.assertEqual(kind, "mismatch")
         self.assertIn("You have Mercury 1.9.13; AG7JC runs 1.9.21", text)
         self.assertEqual(mv.compare(("old", None), "1.9.21", "AG7JC")[0], "mismatch")
-        self.assertEqual(mv.compare(("ok", "1.9.22"), "1.9.21", "AG7JC")[0], "mismatch")   # newer is also different
+        self.assertIn("Install 1.9.21 or newer", text)
+        # 1.9.20 and later all connect to each other (Mercury 1.9.22 release notes)
+        self.assertEqual(mv.compare(("ok", "1.9.22"), "1.9.21", "AG7JC"),
+                         ("match", "Mercury 1.9.22 \u2713 connects to AG7JC's 1.9.21"))
+        self.assertEqual(mv.compare(("ok", "1.9.20"), "1.9.22", "AG7JC")[0], "match")
+        self.assertEqual(mv.compare(("ok", "1.10.0"), "1.9.22", "AG7JC")[0], "match")
+        self.assertEqual(mv.compare(("ok", "1.9.19"), "1.9.22", "AG7JC")[0], "mismatch")
+        self.assertIn("often don't connect", mv.compare(("ok", "1.9.13"), "1.9.17", "AG7JC")[1])
         self.assertEqual(mv.compare(("not-running", None), "1.9.21", "AG7JC")[0], "info")
         self.assertEqual(mv.compare(("unknown", None), "1.9.21", "AG7JC")[0], "info")
 

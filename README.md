@@ -18,7 +18,7 @@ By default it calls **AG7JC**. Settings can point it at any station running merc
 
 ## What you need
 
-- **Mercury** running on this computer, set up with your radio's audio and PTT. **Use the same Mercury version as the station you're calling**: different versions can hear each other's calls without connecting (1.9.13 and 1.9.21 don't). AG7JC runs **1.9.21**.
+- **Mercury** running on this computer, set up with your radio's audio and PTT. **Use Mercury 1.9.20 or newer**, like the station you're calling: 1.9.20 and later all connect to each other, but not to anything older (an older station hears the calls and never connects). AG7JC keeps up with the latest release.
 - **Nothing else using Mercury.** It only accepts one program at a time, so close Winlink Express, Pat or mercury-connector first.
 - **Your radio on the station's frequency.** For AG7JC, that's **14.105 MHz USB (dial)**.
 
@@ -39,8 +39,8 @@ To put it in your app menu with its icon: `./install.sh` (undo with `./install.s
 
 ## Use
 
-1. Check the light under **Calling**. It shows whether the station is on the air right now, from the same live feed as its website. With no internet it just says "unavailable", and you can still call.
-   Under it, the app compares your Mercury with the station's: green if they match, orange if they don't (different versions hear each other but don't connect). It asks the Mercury that's running on this computer, so start Mercury first. With no internet there's no comparison, and you can still call.
+1. Check the light under **Calling**. It shows whether the station is on the air right now, from the same live feed as its website. The feed only counts for the station it names, so calling someone else never shows AG7JC's light. With no internet, or for a station without a feed, it just says so, and you can still call.
+   Under it, the app compares your Mercury with the station's: green if they connect (the same version, or both 1.9.20 or newer), orange if they don't. It asks the Mercury that's running on this computer, so start Mercury first. With no internet there's no comparison, and you can still call.
 2. Enter your callsign. Grid and name are optional.
 3. **Echo test**: it calls, sends a ping, shows the station's report on you, and hangs up.
 4. **Send message**: same, with your text.
@@ -50,7 +50,9 @@ To put it in your app menu with its icon: `./install.sh` (undo with `./install.s
 
 <img src="docs/version-mismatch.png" alt="Your Mercury differs from the station's" width="420">
 
-If the station says it's off the air or busy, or your Mercury version doesn't match the station's, the app asks before calling.
+If the station says it's off the air or busy, or your Mercury version doesn't match the station's, the app asks before calling: once. After that the line under **Calling** keeps saying it, with no more pop-ups until something changes. For a station that doesn't publish its version, it shows yours and reminds you that both ends need the same one.
+
+Once a day the app checks GitHub for a newer release and, if there is one, shows a quiet line with a link. No internet, nothing shown.
 
 Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address (the station website's hf-contact.json) if you're calling a station other than AG7JC.
 
@@ -84,12 +86,19 @@ Put your dial frequency in **Settings** and the app checks it. Or give it your r
 
 ## Station list
 
-If the station you call publishes a list of stations (AG7JC's is `https://ag7jc.com/data/stations.json`), **Settings** offers them in a drop-down: pick one and its call, frequency and notes fill in. Stations running an echo service are marked. You can still type any callsign. No internet: no list, nothing else changes.
+If the station you call publishes a list of stations (AG7JC's is `https://ag7jc.com/data/stations.json`), **Settings** offers them in a drop-down: pick one and its call, frequency, grid and listening hours fill in (in UTC and your own time). Each is marked **worked on air** (it has been reached over HF) or **listed** (added on request), and stations running an echo service say so. You can still type any callsign. The last list downloaded is kept, so the drop-down works in the field with no internet.
+
+**List my station…** (in Settings) asks whoever runs the list to add your station, or take it off. It fills in your call, grid, frequency, hours (converted to UTC) and Mercury version; you tick that it's OK to show publicly. Send it **over Mercury** (one call to the list's owner) or by **Email** (or **Copy** it into any mail). It's a request: the owner checks it and adds it by hand.
 
 ```json
-{"stations": [{"call": "AG7JC", "freq_mhz": 14.105, "grid": "DM12", "when": "Most evenings",
-               "echo_service": true, "status_url": "https://ag7jc.com/data/hf-contact.json"}]}
+{"updated": "2026-11-03T18:00:00Z",
+ "submit": {"call": "AG7JC", "email": "joshua@ag7jc.com"},
+ "stations": [{"call": "AG7JC", "freq_mhz": 14.105, "grid": "DM12", "hours_utc": [1, 6],
+               "echo_service": true, "worked": true, "last_confirmed": "2026-11-03",
+               "status_url": "https://ag7jc.com/data/hf-contact.json"}]}
 ```
+
+Only `call` is required. To give your own station a live light and version check in everyone's app, publish a status file like AG7JC's with your `"callsign"` in it and put its address in `status_url`.
 
 ## Log it
 

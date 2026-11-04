@@ -5,10 +5,10 @@ import stat
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest import mock
 
-from hf_contact import adif, notify, rig, stations
+from hf_contact import adif, listing, notify, rig, stations, updates
 
 
 class Adif(unittest.TestCase):
@@ -71,25 +71,117 @@ class Rig(unittest.TestCase):
 
 
 class Stations(unittest.TestCase):
+    DOC = {"updated": "2026-11-03T18:00:00Z",
+           "submit": {"call": "ag7jc", "email": "joshua@ag7jc.com"},
+           "stations": [
+               {"call": "ag7jc", "freq_mhz": 14.105, "grid": "dm12", "hours_utc": [1, 6], "when": "most  evenings",
+                "echo_service": True, "worked": True, "last_confirmed": "2026-11-03",
+                "status_url": "https://ag7jc.com/data/hf-contact.json"},
+               {"call": "AG7JC"},                                   # duplicate
+               {"call": "not a call"}, "junk", {"freq_mhz": 7.1},
+               {"call": "VU2XYZ", "freq_mhz": "fast", "grid": "XX99", "hours_utc": [25, 3],
+                "status_url": "http://insecure", "last_confirmed": "2026-01-02"}]}
+
     def test_parse(self):
-        doc = {"stations": [
-            {"call": "ag7jc", "freq_mhz": 14.105, "grid": "dm12", "when": "Most  evenings", "echo_service": True,
+        got = stations.parse(self.DOC)
+        self.assertEqual(got["submit"], {"call": "AG7JC", "email": "joshua@ag7jc.com"})
+        self.assertEqual(got["updated"], "2026-11-03T18:00:00Z")
+        self.assertEqual(got["stations"], [
+            {"call": "AG7JC", "freq_mhz": 14.105, "grid": "DM12", "hours_utc": [1, 6], "when": "most evenings",
+             "echo_service": True, "worked": True, "last_confirmed": "2026-11-03",
              "status_url": "https://ag7jc.com/data/hf-contact.json"},
-            {"call": "AG7JC"},                                   # duplicate
-            {"call": "not a call"}, "junk", {"freq_mhz": 7.1},
-            {"call": "K1ABC", "freq_mhz": "fast", "grid": "XX99", "status_url": "http://insecure"},
-        ]}
-        got = stations.parse(doc)
-        self.assertEqual(got, [
-            {"call": "AG7JC", "freq_mhz": 14.105, "grid": "DM12", "when": "Most evenings", "echo_service": True,
-             "status_url": "https://ag7jc.com/data/hf-contact.json"},
-            {"call": "K1ABC"}])
-        self.assertEqual(stations.label(got[0]), "AG7JC · 14.105 MHz · DM12 · echo service")
-        self.assertEqual(stations.as_settings(got[0]), {
-            "call": "AG7JC", "freq": "14.105 MHz USB (dial)", "note": "DM12 · Most evenings · echo service",
+            {"call": "VU2XYZ", "last_confirmed": "2026-01-02"}])
+        self.assertEqual(stations.parse(None), {"stations": [], "submit": None, "updated": None})
+        self.assertIsNone(stations.parse({"submit": {"call": "x", "email": "nope"}})["submit"])
+
+    def test_labels_and_settings(self):
+        ag, vu = stations.parse(self.DOC)["stations"]
+        today = date(2026, 11, 3)
+        self.assertEqual(stations.label(ag, today), "AG7JC · 14.105 MHz · DM12 · echo service · worked on air")
+        self.assertEqual(stations.label(vu, today), "VU2XYZ · listed · not confirmed since 2026-01")
+        self.assertEqual(stations.hours_text(ag, offset_hours=-8), "01:00–06:00 UTC (17:00–22:00 your time)")
+        self.assertEqual(stations.as_settings(ag, offset_hours=-8), {
+            "call": "AG7JC", "freq": "14.105 MHz USB (dial)",
+            "note": "DM12 · 01:00–06:00 UTC (17:00–22:00 your time) · echo service",
             "status_url": "https://ag7jc.com/data/hf-contact.json"})
-        self.assertEqual(stations.parse(None), [])
-        self.assertEqual(stations.fetch("http://127.0.0.1:1/stations.json", timeout=1), [])
+        self.assertEqual(stations.as_settings(vu)["status_url"], "", "another station's status URL can't stay")
+
+    def test_saved_copy_when_offline(self):
+        import http.server
+        import json as _json
+        body = _json.dumps(self.DOC).encode()
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/stations.json"
+        cache = os.path.join(tempfile.mkdtemp(), "stations-cache.json")
+        fresh = stations.fetch_cached(url, cache)
+        self.assertEqual(len(fresh["stations"]), 2)
+        self.assertNotIn("cached_at", fresh)
+        srv.shutdown()
+        srv.server_close()
+        offline = stations.fetch_cached(url, cache, timeout=1)
+        self.assertEqual(offline["stations"], fresh["stations"])
+        self.assertEqual(offline["submit"], fresh["submit"])
+        self.assertTrue(offline["cached_at"])
+        self.assertIsNone(stations.fetch_cached("http://127.0.0.1:1/other.json", cache, timeout=1),
+                          "a saved copy only stands in for the same list")
+
+
+class Listing(unittest.TestCase):
+    def test_request_round_trip(self):
+        text, problems = listing.build("add", "vu2xyz", "mk82qx", 14.105, (13, 16), True, "1.9.21",
+                                       "Bangalore,  100 W\nand a dipole", True)
+        self.assertEqual(problems, [])
+        self.assertEqual(text, "STATION LIST REQUEST\naction: add\ncall: VU2XYZ\ngrid: MK82\nfreq: 14.105\n"
+                               "hours_utc: 13-16\necho_service: yes\nmercury: 1.9.21\npublic: yes\n"
+                               "note: Bangalore, 100 W and a dipole\n")
+        self.assertEqual(listing.parse(text)["call"], "VU2XYZ")
+        self.assertEqual(listing.parse(text)["hours_utc"], "13-16")
+        self.assertIsNone(listing.parse("hello"))
+
+    def test_problems(self):
+        self.assertIsNone(listing.build("add", "", public=True)[0])
+        text, problems = listing.build("add", "K1ABC", grid="12AB", public=False)
+        self.assertIsNone(text)
+        self.assertEqual(len(problems), 2)
+        text, problems = listing.build("remove", "K1ABC", public=False)    # removing needs no consent box
+        self.assertEqual(text, "STATION LIST REQUEST\naction: remove\ncall: K1ABC\n")
+
+    def test_utc_and_mail(self):
+        self.assertEqual(listing.utc_hours(18, 22, offset_hours=-8), (2, 6))
+        self.assertEqual(listing.utc_hours(18, 22, offset_hours=5), (13, 17))
+        url = listing.mailto("joshua@ag7jc.com", "K1ABC", "STATION LIST REQUEST\naction: add\n")
+        self.assertTrue(url.startswith("mailto:joshua@ag7jc.com?subject=Station%20list%3A%20add%20K1ABC&body="))
+        self.assertIn("STATION%20LIST%20REQUEST%0Aaction%3A%20add", url)
+
+
+class Updates(unittest.TestCase):
+    def test_newer(self):
+        self.assertEqual(updates.newer("v0.5.1", "0.5.0"), "0.5.1")
+        self.assertEqual(updates.newer("v0.10.0", "0.9.21"), "0.10.0")
+        self.assertIsNone(updates.newer("v0.5.0", "0.5.0"))
+        self.assertIsNone(updates.newer("v0.4.9", "0.5.0"))
+        self.assertIsNone(updates.newer("nightly", "0.5.0"))
+
+    def test_offline(self):
+        self.assertIsNone(updates.check("0.5.0", url="http://127.0.0.1:1/latest", timeout=1))
+
+
+class Reminder(unittest.TestCase):
+    def test_reminder(self):
+        from hf_contact.mercury_version import reminder
+        self.assertEqual(reminder(("ok", "1.9.21"), "K1ABC"), "Your Mercury is 1.9.21. K1ABC needs 1.9.20 or newer to connect.")
+        self.assertIn("older than 1.9.20", reminder(("ok", "1.9.13"), "K1ABC"))
+        self.assertIn("compatible Mercury versions", reminder(("not-running", None), "K1ABC"))
 
 
 class Notify(unittest.TestCase):

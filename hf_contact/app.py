@@ -21,6 +21,8 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import __version__
 from . import adif
+from . import listing
+from . import updates
 from . import notify
 from . import rig
 from . import stations as station_list
@@ -56,7 +58,8 @@ class Store:
                          # echo service (never starts by itself: the switch is always off at launch)
                          "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
                          "echo_rules_ok": False, "echo_listening": False,
-                         "echo_notify": True, "rig_addr": "", "stations_url": station_list.DEFAULT_URL}
+                         "echo_notify": True, "rig_addr": "", "stations_url": station_list.DEFAULT_URL,
+                         "update_checked": 0}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -89,7 +92,11 @@ class App:
         self.svc_retry_at = 0
         self.svc_state = "off"
         self.rig_mhz = None             # the dial as rigctld reports it, when set up
-        self.stations = []              # the published station list, when there's internet
+        self.stations = []              # the published station list (or the last one saved)
+        self.list_submit = None         # where "List my station" requests go, from the list
+        self.list_cached_at = None      # set when the list is the saved copy (no internet)
+        self.asked = set()              # warnings already asked about; then just shown
+        self._list_request_pending = False
         root.title("HF Contact")
         root.configure(bg=BG)
         root.minsize(420, 560)
@@ -101,6 +108,7 @@ class App:
         self.root.after(300, self._refresh_live)
         self.root.after(1000, self._svc_tick)
         self._fetch_stations()
+        self.root.after(4000, self._check_update)
         if self.store.settings.get("echo_listening"):
             self._svc_cleanup()
         root.protocol("WM_DELETE_WINDOW", self._quit)
@@ -139,6 +147,8 @@ class App:
                indicatorbackground=[("selected", "#009a9a"), ("active", "#262d33")],
                indicatorforeground=[("selected", "white")])
         st.configure("Link.TButton", background=PANEL, foreground=TEAL, padding=(6, 2))
+        st.configure("Update.TButton", background=BG, foreground=TEAL, padding=(0, 2))
+        st.map("Update.TButton", background=[("active", BG)], foreground=[("active", FG)])
         st.configure("TCombobox", background="#262d33", arrowcolor=FG)
         st.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
                selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)],
@@ -158,10 +168,13 @@ class App:
         ttk.Label(outer, text="HF CONTACT", style="Title.TLabel").pack(anchor="w", **pad)
         ttk.Label(outer, text="Echo test and short messages over HF, through your own Mercury modem.",
                   style="Dim.TLabel", wraplength=520, justify="left").pack(anchor="w", **pad)
+        self.update_btn = ttk.Button(outer, text="", style="Update.TButton",
+                                     command=lambda: webbrowser.open(updates.RELEASES_PAGE))
 
         # the station we call
         card = ttk.Frame(outer, style="Card.TFrame", padding=10)
         card.pack(fill="x", pady=(10, 6), **pad)
+        self.update_anchor = card
         top = ttk.Frame(card, style="Card.TFrame")
         top.pack(fill="x")
         ttk.Label(top, text="Calling", style="CardDim.TLabel").pack(side="left")
@@ -338,13 +351,21 @@ class App:
         self.live_light.itemconfigure(self.live_dot, fill={"listening": GREEN, "busy": ORANGE,
                                                            "off": RED}.get(state, GRAY))
         self.live_lbl.configure(text=text)
-        self.station_mercury = mv.station_version(doc)
+        call = self.store.settings["station"].get("call", "")
+        self.station_mercury = mv.station_version(doc) if station_status.belongs_to(doc, call) else None
+        if state not in ("off", "busy"):
+            self.asked -= {("off", call), ("busy", call)}     # back on: ask again next time it goes off
         self._show_version()
 
     def _show_version(self):
         call = self.store.settings["station"].get("call", "The station")
         res = mv.compare(self.local_mercury, self.station_mercury, call)
-        self.ver_kind = res[0] if res else None
+        if res is None:
+            # no live version for this station: say what we know, check nothing
+            res = ("info", mv.reminder(self.local_mercury, call))
+        self.ver_kind = res[0]
+        if self.ver_kind != "mismatch":
+            self.asked = {k for k in self.asked if k[0] != "mismatch"}
         self.ver_lbl.configure(text=res[1] if res else "",
                                foreground={"match": GREEN, "mismatch": ORANGE}.get(self.ver_kind, DIM))
         if self.ver_kind == "mismatch":
@@ -353,18 +374,26 @@ class App:
             self.ver_link.pack_forget()
 
     def _go_anyway(self):
-        """Ask before calling a station that says it's off the air or busy.
-        Unknown (no internet) never stops anyone."""
+        """Ask before calling a station that says it's off the air, busy, or on
+        another Mercury version -- once. After a yes, the line under "Calling"
+        keeps saying it, but there's no pop-up again until things change.
+        Unknown (no internet, no status) never stops anyone."""
         call = self.store.settings["station"]["call"]
         if self.live_state == "off":
-            return messagebox.askyesno("HF Contact", f"{call} looks off the air right now, so nobody may "
-                                       f"answer.\n\nCall anyway?")
-        if self.live_state == "busy":
-            return messagebox.askyesno("HF Contact", f"{call} is in a call with someone else right now.\n\n"
-                                       f"Call anyway?")
-        if self.ver_kind == "mismatch":
-            return messagebox.askyesno("HF Contact", self.ver_lbl.cget("text") + "\n\nCall anyway?")
-        return True
+            key, text = ("off", call), f"{call} looks off the air right now, so nobody may answer."
+        elif self.live_state == "busy":
+            key, text = ("busy", call), f"{call} is in a call with someone else right now."
+        elif self.ver_kind == "mismatch":
+            key, text = ("mismatch", call, self.local_mercury, self.station_mercury), self.ver_lbl.cget("text")
+        else:
+            return True
+        if key in self.asked:
+            return True
+        ok = messagebox.askyesno("HF Contact", text + "\n\nCall anyway? (You won't be asked again about "
+                                 "this unless it changes.)")
+        if ok:
+            self.asked.add(key)
+        return ok
 
     def _toggle_log(self):
         if self.log_shown:
@@ -416,14 +445,14 @@ class App:
             msg = compose_message(text, self.store.settings.get("name", ""), cfg["grid"])
             self._start(cfg, message=msg, typed=text)
 
-    def _start(self, cfg, echo=False, message=None, typed=None):
+    def _start(self, cfg, echo=False, message=None, typed=None, check=True):
         if self.busy:
             return
         if self.svc and self.svc.linked_with:
             messagebox.showinfo("HF Contact", f"{self.svc.linked_with} is linked to your echo service right "
                                 f"now. Try again when they're done (a minute or two at most).")
             return
-        if not self._go_anyway():
+        if check and not self._go_anyway():
             return
         self.busy = True
         svc = self._svc_stop("paused")      # one program on Mercury at a time
@@ -472,7 +501,14 @@ class App:
                 elif kind == "done":
                     self._done(val)
                 elif kind == "stations":
-                    self.stations = val or self.stations
+                    if val is not None:
+                        self.stations = val["stations"]
+                        self.list_submit = val.get("submit")
+                        self.list_cached_at = val.get("cached_at")
+                elif kind == "update":
+                    if val:
+                        self.update_btn.configure(text=f"HF Contact {val} is out. Get it \u2192")
+                        self.update_btn.pack(anchor="w", padx=14, before=self.update_anchor)
                 elif kind == "rig":
                     if val != self.rig_mhz:
                         self.rig_mhz = val
@@ -485,6 +521,7 @@ class App:
 
     def _done(self, r):
         self.busy = False
+        list_request, self._list_request_pending = self._list_request_pending, False
         self.root.after(500, self._svc_tick)    # back to listening, if it's on
         threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(
             self.store.settings.get("status_url", "")))), daemon=True).start()
@@ -511,6 +548,9 @@ class App:
         for name, body in r.replies:
             add("reply", body)
         if r.error:
+            if list_request and not r.linked:
+                r.error += (" Your station list request didn't go out. Try Email or Copy instead "
+                            "(Settings \u2192 List my station).")
             add("err", r.error)
             self._set_light(RED)
             self.status_lbl.configure(text="Didn't work -- see History")
@@ -747,8 +787,140 @@ class App:
 
     def _fetch_stations(self):
         url = self.store.settings.get("stations_url", "")
-        threading.Thread(target=lambda: self.events.put(("stations", station_list.fetch(url))),
+        cache = self.store.dir / "stations-cache.json"
+        threading.Thread(target=lambda: self.events.put(("stations", station_list.fetch_cached(url, cache))),
                          daemon=True).start()
+
+    def _check_update(self):
+        """Once a day: is there a newer release? Quiet line if so."""
+        s = self.store.settings
+        now = time.time()
+        if now - float(s.get("update_checked") or 0) >= updates.DAY:
+            s["update_checked"] = now
+            self.store.save()
+            threading.Thread(target=lambda: self.events.put(("update", updates.check(__version__))),
+                             daemon=True).start()
+        self.root.after(6 * 3600 * 1000, self._check_update)
+
+    # ------------------------------------------------------------ list my station
+
+    def _list_my_station(self, parent=None):
+        s = self.store.settings
+        sub = self.list_submit or {}
+        win = tk.Toplevel(parent or self.root, bg=BG)
+        win.title("List my station")
+        win.transient(parent or self.root)
+        win.resizable(False, False)
+        frm = ttk.Frame(win, padding=14)
+        frm.pack(fill="both", expand=True)
+        owner = sub.get("call") or "the list's owner"
+        ttk.Label(frm, text=f"Ask {owner} to add your station to the station list (or take it off). "
+                            f"It's a request: they check it and add it by hand.", style="Dim.TLabel",
+                  wraplength=420, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        action = tk.StringVar(value="add")
+        r = ttk.Frame(frm)
+        r.grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Radiobutton(r, text="Add or update my station", value="add", variable=action).pack(side="left")
+        ttk.Radiobutton(r, text="Remove it", value="remove", variable=action).pack(side="left", padx=12)
+        call_v = tk.StringVar(value=self.call_var.get().strip().upper() or s.get("mycall", ""))
+        grid_v = tk.StringVar(value=(self.grid_var.get().strip().upper() or s.get("grid", ""))[:4])
+        dial = self._svc_dial()
+        freq_v = tk.StringVar(value=f"{dial:.3f}" if dial else "")
+        hrs = [f"{h:02d}:00" for h in range(24)]
+        a = int(s.get("echo_from", 18)) % 24 if s.get("echo_schedule") == "hours" else 0
+        b = int(s.get("echo_to", 22)) % 24 if s.get("echo_schedule") == "hours" else 0
+        from_v, to_v = tk.StringVar(value=hrs[a]), tk.StringVar(value=hrs[b])
+        echo_v = tk.BooleanVar(value=bool(self.svc_var.get()))
+        note_v = tk.StringVar()
+        public_v = tk.BooleanVar(value=False)
+        rows = (("Your callsign", ttk.Entry(frm, textvariable=call_v, width=14)),
+                ("Grid (4 characters)", ttk.Entry(frm, textvariable=grid_v, width=8)),
+                ("Frequency, MHz", ttk.Entry(frm, textvariable=freq_v, width=10)))
+        for i, (label, w) in enumerate(rows, start=2):
+            ttk.Label(frm, text=label, style="Dim.TLabel").grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
+            w.grid(row=i, column=1, sticky="w", pady=3)
+        hr = ttk.Frame(frm)
+        hr.grid(row=5, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Usually listening", style="Dim.TLabel").grid(row=5, column=0, sticky="w", padx=(0, 10))
+        ttk.Combobox(hr, textvariable=from_v, values=hrs, width=6, state="readonly").pack(side="left")
+        ttk.Label(hr, text="to").pack(side="left", padx=4)
+        ttk.Combobox(hr, textvariable=to_v, values=hrs, width=6, state="readonly").pack(side="left")
+        utc_lbl = ttk.Label(hr, text="", style="Dim.TLabel")
+        utc_lbl.pack(side="left", padx=6)
+
+        def show_utc(*_):
+            fa, fb = int(from_v.get()[:2]), int(to_v.get()[:2])
+            if fa == fb:
+                utc_lbl.configure(text="(any time)")
+            else:
+                ua, ub = listing.utc_hours(fa, fb)
+                utc_lbl.configure(text=f"your time = {ua:02d}–{ub:02d} UTC")
+        from_v.trace_add("write", show_utc)
+        to_v.trace_add("write", show_utc)
+        show_utc()
+        ttk.Checkbutton(frm, text="I run an HF Contact echo service", variable=echo_v).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=3)
+        ttk.Label(frm, text="Note (optional)", style="Dim.TLabel").grid(row=7, column=0, sticky="w", padx=(0, 10))
+        ttk.Entry(frm, textvariable=note_v, width=34).grid(row=7, column=1, sticky="w", pady=3)
+        ttk.Checkbutton(frm, text="OK to show this publicly on the station list", variable=public_v).grid(
+            row=8, column=0, columnspan=2, sticky="w", pady=(6, 3))
+        mv_state, mv_ver = self.local_mercury
+        info = ttk.Label(frm, text=(f"Your Mercury version ({mv_ver}) is added automatically." if mv_ver else
+                                    "Start Mercury first and its version is added too."),
+                         style="Dim.TLabel", wraplength=420, justify="left")
+        info.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 8))
+
+        def request():
+            fa, fb = int(from_v.get()[:2]), int(to_v.get()[:2])
+            text, problems = listing.build(
+                action.get(), call_v.get(), grid_v.get(), es.parse_mhz(freq_v.get()),
+                None if fa == fb else listing.utc_hours(fa, fb), echo_v.get(), mv_ver or "", note_v.get(),
+                public_v.get() or action.get() == "remove")
+            if problems:
+                messagebox.showwarning("List my station", "\n".join(problems), parent=win)
+            return text
+
+        def by_mercury():
+            text = request()
+            if not text:
+                return
+            mycall = call_v.get().strip().upper()
+            cfg = {"mycall": mycall, "target": sub["call"], "host": s.get("host", "127.0.0.1"),
+                   "port": int(s.get("port", 8300)), "grid": grid_v.get().strip().upper()}
+            win.destroy()
+            self._list_request_pending = True
+            self._start(cfg, message=text, typed=text, check=False)
+
+        def by_email():
+            text = request()
+            if text:
+                webbrowser.open(listing.mailto(sub["email"], call_v.get().strip().upper(), text))
+
+        def copy():
+            text = request()
+            if text:
+                win.clipboard_clear()
+                win.clipboard_append((f"To: {sub['email']}\n\n" if sub.get("email") else "") + text)
+                messagebox.showinfo("List my station", "Copied. Paste it into an email"
+                                    + (f" to {sub['email']}." if sub.get("email") else "."), parent=win)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=10, column=0, columnspan=2, sticky="e")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=(0, 8))
+        cp = ttk.Button(btns, text="Copy", command=copy)
+        cp.pack(side="left", padx=(0, 8))
+        em = ttk.Button(btns, text="Email", command=by_email)
+        em.pack(side="left", padx=(0, 8))
+        hf = ttk.Button(btns, text=f"Send over Mercury", style="Go.TButton", command=by_mercury)
+        hf.pack(side="left")
+        if not sub.get("email"):
+            em.state(["disabled"])
+        if not sub.get("call") or self.busy:
+            hf.state(["disabled"])
+        if not sub:
+            ttk.Label(frm, text="The station list hasn't loaded (no internet, or no list URL in Settings), so "
+                                "there's nowhere to send this yet.", style="Dim.TLabel", foreground=ORANGE,
+                      wraplength=420, justify="left").grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
     def _settings(self):
         s = self.store.settings
@@ -767,6 +939,9 @@ class App:
                   ("Station list URL (optional)", "stations_url", s.get("stations_url", ""))]
         vars_ = {}
         picks = {station_list.label(st): st for st in self.stations}
+        if picks and self.list_cached_at:
+            ttk.Label(frm, text=f"Station list: saved copy from {self.list_cached_at[:10]} (no internet now)",
+                      style="Dim.TLabel").grid(row=len(fields) + 4, column=0, columnspan=2, sticky="w")
         for i, (label, key, val) in enumerate(fields):
             ttk.Label(frm, text=label, style="Dim.TLabel").grid(row=i, column=0, sticky="w", pady=4, padx=(0, 10))
             v = tk.StringVar(value=val)
@@ -779,8 +954,7 @@ class App:
                     st = picks.get(v.get())
                     if st:
                         for k, val2 in station_list.as_settings(st).items():
-                            if k != "status_url" or val2:
-                                vars_[k].set(val2)
+                            vars_[k].set(val2)          # including an empty status URL
                 box.bind("<<ComboboxSelected>>", picked)
             else:
                 ttk.Entry(frm, textvariable=v, width=32).grid(row=i, column=1, sticky="we", pady=4)
@@ -878,6 +1052,8 @@ class App:
 
         btns = ttk.Frame(frm)
         btns.grid(row=len(fields) + 2, column=0, columnspan=2, sticky="e")
+        ttk.Button(btns, text="List my station…", style="Update.TButton",
+                   command=lambda: self._list_my_station(win)).pack(side="left", padx=(0, 24))
         ttk.Button(btns, text="Defaults", command=reset).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Save", style="Go.TButton", command=save).pack(side="left")

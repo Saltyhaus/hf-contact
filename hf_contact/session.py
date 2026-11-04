@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from .tnc import MercuryTnc, TncError
 
 CALL_RE = re.compile(r"^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])[A-Z0-9]{3,10}(-[0-9]{1,2})?$")
+FAR_AWAY = ("Check the frequency. Over long distances HF depends on the band and the time of day, so try "
+            "another time, or pick a closer station from the list.")
 MAX_MESSAGE = 2000          # the station accepts 4 KB; leave room for the signature
 
 
@@ -103,8 +105,7 @@ def run_session(cfg, echo=False, message=None, progress=lambda kind, text: None,
                 return r
             left = connect_timeout - (time.time() - start)
             if left <= 0:
-                r.error = (f"No answer from {target} after {connect_timeout} s. Check the frequency and "
-                           f"that you're within range, or try another time.")
+                r.error = (f"No answer from {target} after {connect_timeout} s. {FAR_AWAY}")
                 tnc.hang_up()
                 return r
             try:
@@ -116,7 +117,7 @@ def run_session(cfg, echo=False, message=None, progress=lambda kind, text: None,
             elif kind == "connected":
                 break
             elif kind == "disconnected":
-                r.error = f"{target} didn't answer (the link was not made)."
+                r.error = f"{target} didn't answer. {FAR_AWAY}"
                 return r
             elif kind == "closed":
                 r.error = val
