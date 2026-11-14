@@ -18,9 +18,18 @@ By default it calls **AG7JC**. Settings can point it at any station running merc
 
 ## What you need
 
-- **Mercury** running on this computer, set up with your radio's audio and PTT. **Use Mercury 1.9.20 or newer**, like the station you're calling: 1.9.20 and later all connect to each other, but not to anything older (an older station hears the calls and never connects). AG7JC keeps up with the latest release.
+- **Mercury** running on this computer, set up with your radio's audio and PTT. That's all HF Contact talks to: you **don't** need mercury-connector or anything else on your side. HF Contact doesn't start Mercury for you, so start it first. **Use Mercury 1.9.20 or newer**, like the station you're calling: 1.9.20 and later all connect to each other, but not to anything older (an older station hears the calls and never connects). AG7JC keeps up with the latest release.
 - **Nothing else using Mercury.** It serves one program at a time, and since 1.9.24 it turns the rest away. Close Winlink Express or Pat first, and stop mercury-connector (in [OffGrid Comms](https://github.com/Saltyhaus/offgrid-comms), press **Pause mail**: Mercury and the radio stay on). If Mercury turns HF Contact away, the app says which program has it (on Linux, for programs you started; on Windows it lists the usual ones).
 - **Your radio on the station's frequency.** For AG7JC, that's **14.105 MHz USB (dial)**.
+
+### With OffGrid Comms on the same computer
+
+[OffGrid Comms](https://github.com/Saltyhaus/offgrid-comms) runs Mercury for you, and its mail connector keeps hold of it. To use HF Contact alongside it:
+
+1. In OffGrid, set the HF switch to **MERCURY**. That starts Mercury (OFF stops Mercury too, and then HF Contact has nothing to call through).
+2. Press **Pause mail**. The connector steps aside; Mercury and the radio stay on.
+3. Use HF Contact.
+4. Press **Resume mail** when you're done, or leave it: mail comes back on its own after 10 minutes with nothing using Mercury.
 
 ## Install
 
