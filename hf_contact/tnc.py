@@ -19,6 +19,8 @@ import struct
 import threading
 import time
 
+from . import holder
+
 MAX_FRAME = 1024 * 1024          # nothing we expect is anywhere near this
 
 
@@ -73,8 +75,12 @@ class MercuryTnc:
             s.settimeout(None)
         threading.Thread(target=self._read_ctl, daemon=True).start()
         threading.Thread(target=self._read_dat, daemon=True).start()
-        busy = TncError("Mercury closed the connection. Another program (Winlink Express, Pat, "
-                        "mercury-connector...) is probably using it -- close that first.")
+        def busy():
+            # whoever turned us away is still connected: name it if we can
+            try:
+                return TncError(holder.busy_message(holder.who_holds(self.port)))
+            except Exception:
+                return TncError(holder.busy_message([]))
         # same setup mercury-connector uses
         try:
             setup = [f"MYCALL {mycall}"] if mycall else []
@@ -82,12 +88,12 @@ class MercuryTnc:
                 self.command(cmd)
         except TncError:
             self.close()
-            raise busy
+            raise busy()
         # a modem already in use by another program usually hangs up on us
         time.sleep(0.5)
         if self._stop.is_set():
             self.close()
-            raise busy
+            raise busy()
 
     def close(self):
         self._stop.set()

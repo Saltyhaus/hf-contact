@@ -28,6 +28,7 @@ from . import rig
 from . import stations as station_list
 from . import echo_service as es
 from . import mercury_version as mv
+from . import scroll
 from . import status as station_status
 from .session import MAX_MESSAGE, compose_message, echo_summary, run_session, valid_call
 
@@ -59,7 +60,7 @@ class Store:
                          "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
                          "echo_rules_ok": False, "echo_listening": False,
                          "echo_notify": True, "rig_addr": "", "stations_url": station_list.DEFAULT_URL,
-                         "update_checked": 0}
+                         "update_checked": 0, "text_size": "normal", "window": ""}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -99,9 +100,10 @@ class App:
         self._list_request_pending = False
         root.title("HF Contact")
         root.configure(bg=BG)
-        root.minsize(420, 560)
+        root.minsize(420, 360)
         self._style()
         self._build()
+        self._size_window()
         self._load_fields()
         self._render_history()
         self.root.after(150, self._pump)
@@ -160,14 +162,39 @@ class App:
             self.root.option_add(f"*TCombobox*Listbox.{opt}", val)
         st.map("Link.TButton", background=[("active", "#262d33")])
 
+    def _size_window(self):
+        """Fit the screen: a 768-pixel laptop can't show it all, so the
+        window scrolls rather than cutting off the bottom."""
+        self.root.update_idletasks()
+        want_w = self.area.body.winfo_reqwidth()
+        want_h = self.area.needed_height()
+        scroll.fit_to_screen(self.root, want_w, want_h, saved=self.store.settings.get("window"))
+
     def _build(self):
         pad = {"padx": 14}
-        outer = ttk.Frame(self.root)
-        outer.pack(fill="both", expand=True, pady=10)
+        self.area = scroll.ScrollArea(self.root, bg=BG)
+        self.area.pack(fill="both", expand=True)
+        frame = ttk.Frame(self.area.body)
+        frame.pack(fill="both", expand=True, pady=10)
+        # a wide screen gets two columns: the controls, and History + the
+        # modem log using the window's full height. Narrow: one column.
+        outer = ttk.Frame(frame)
+        logs_col = ttk.Frame(frame)
+        self.wide = self.root.winfo_screenwidth() >= 1150
+        if self.wide:
+            outer.grid(row=0, column=0, sticky="nsw")
+            logs_col.grid(row=0, column=1, sticky="nsew", padx=(0, 4))
+            frame.columnconfigure(1, weight=1)
+            frame.rowconfigure(0, weight=1)
+        else:
+            outer.grid(row=0, column=0, sticky="nsew")
+            logs_col.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=1)
 
         ttk.Label(outer, text="HF CONTACT", style="Title.TLabel").pack(anchor="w", **pad)
         ttk.Label(outer, text="Echo test and short messages over HF, through your own Mercury modem.",
-                  style="Dim.TLabel", wraplength=520, justify="left").pack(anchor="w", **pad)
+                  style="Dim.TLabel", wraplength=700, justify="left").pack(anchor="w", **pad)
         self.update_btn = ttk.Button(outer, text="", style="Update.TButton",
                                      command=lambda: webbrowser.open(updates.RELEASES_PAGE))
 
@@ -181,7 +208,7 @@ class App:
         self.station_lbl = ttk.Label(top, text="", style="Call.TLabel")
         self.station_lbl.pack(side="left", padx=8)
         ttk.Button(top, text="Settings…", style="Link.TButton", command=self._settings).pack(side="right")
-        self.station_info = ttk.Label(card, text="", style="CardDim.TLabel", wraplength=500, justify="left")
+        self.station_info = ttk.Label(card, text="", style="CardDim.TLabel", wraplength=690, justify="left")
         self.station_info.pack(anchor="w", pady=(4, 0))
         live = ttk.Frame(card, style="Card.TFrame")
         live.pack(fill="x", pady=(6, 0))
@@ -189,12 +216,12 @@ class App:
         self.live_light.pack(side="left")
         self.live_dot = self.live_light.create_oval(1, 1, 11, 11, fill=GRAY, outline="")
         self.live_lbl = ttk.Label(live, text="Checking whether the station is on the air…", style="CardDim.TLabel",
-                                  wraplength=470, justify="left")
+                                  wraplength=660, justify="left")
         self.live_lbl.pack(side="left", padx=6)
         self.live_state = "unknown"
         ver = ttk.Frame(card, style="Card.TFrame")
         ver.pack(fill="x", pady=(4, 0))
-        self.ver_lbl = ttk.Label(ver, text="", style="CardDim.TLabel", wraplength=470, justify="left")
+        self.ver_lbl = ttk.Label(ver, text="", style="CardDim.TLabel", wraplength=660, justify="left")
         self.ver_lbl.pack(anchor="w", padx=(18, 6))
         self.ver_link = ttk.Button(ver, text="Get Mercury \u2192", style="Link.TButton",
                                    command=lambda: webbrowser.open(mv.RELEASES_URL))
@@ -228,7 +255,7 @@ class App:
 
         # message
         ttk.Label(outer, text="Message", style="Dim.TLabel").pack(anchor="w", pady=(8, 2), **pad)
-        self.msg = tk.Text(outer, height=5, wrap="word", bg=FIELD, fg=FG, insertbackground=FG,
+        self.msg = tk.Text(outer, height=4, wrap="word", bg=FIELD, fg=FG, insertbackground=FG,
                            relief="flat", highlightthickness=1, highlightbackground="#262d33",
                            highlightcolor=TEAL, padx=8, pady=6, font=("TkDefaultFont", 11))
         self.msg.pack(fill="x", **pad)
@@ -240,7 +267,7 @@ class App:
         self.send_btn = ttk.Button(row, text="Send message", style="Go.TButton", command=self._send)
         self.send_btn.pack(side="right")
         ttk.Label(outer, text="Plain text over amateur radio: no business, no encryption, "
-                              "and anyone can read it.", style="Dim.TLabel", wraplength=520,
+                              "and anyone can read it.", style="Dim.TLabel", wraplength=700,
                   justify="left").pack(anchor="w", pady=(2, 0), **pad)
 
         # your own echo service
@@ -249,9 +276,9 @@ class App:
         self.svc_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(svc, text="Run an echo service", variable=self.svc_var, style="Card.TCheckbutton",
                         command=self._svc_toggle).pack(anchor="w")
-        self.svc_lbl = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=500, justify="left")
+        self.svc_lbl = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=690, justify="left")
         self.svc_lbl.pack(anchor="w", pady=(2, 0))
-        self.svc_warn = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=500, justify="left")
+        self.svc_warn = ttk.Label(svc, text="", style="CardDim.TLabel", wraplength=690, justify="left")
         self._svc_show("off")
 
         # status
@@ -260,25 +287,31 @@ class App:
         self.light = tk.Canvas(st, width=14, height=14, bg=PANEL, highlightthickness=0)
         self.light.pack(side="left")
         self.dot = self.light.create_oval(2, 2, 12, 12, fill=GRAY, outline="")
-        self.status_lbl = ttk.Label(st, text="Ready", style="Card.TLabel", wraplength=480, justify="left")
+        self.status_lbl = ttk.Label(st, text="Ready", style="Card.TLabel", wraplength=680, justify="left")
         self.status_lbl.pack(side="left", padx=8, fill="x", expand=True)
         self.signal_lbl = ttk.Label(outer, text="", style="Dim.TLabel")
         self.signal_lbl.pack(anchor="e", padx=14, pady=(0, 4))
 
         # history
+        outer = logs_col
         hist_head = ttk.Frame(outer)
         hist_head.pack(fill="x", **pad)
         ttk.Label(hist_head, text="History", style="Dim.TLabel").pack(side="left")
         self.log_btn = ttk.Button(hist_head, text="Modem log", style="Link.TButton", command=self._toggle_log)
         self.log_btn.pack(side="right")
         ttk.Button(hist_head, text="Export ADIF…", style="Link.TButton", command=self._export_adif).pack(side="right")
-        self.hist = tk.Text(outer, height=10, wrap="word", bg=FIELD, fg=FG, relief="flat",
+        # History and the modem log share whatever height is left, with a
+        # handle between them; they shrink to fit instead of pushing the
+        # window off the bottom of the screen
+        self.logs = ttk.Panedwindow(outer, orient="vertical")
+        self.logs.pack(fill="both", expand=True, pady=(2, 0), **pad)
+        self.hist = tk.Text(self.logs, height=6, width=48, wrap="word", bg=FIELD, fg=FG, relief="flat",
                             highlightthickness=0, padx=8, pady=6, state="disabled", font=("TkDefaultFont", 10))
-        self.hist.pack(fill="both", expand=True, pady=(2, 0), **pad)
+        self.logs.add(self.hist, weight=3)
         for tag, color in (("when", DIM), ("echo", TEAL), ("reply", GREEN), ("sent", ORANGE), ("err", RED),
                            ("service", TEAL)):
             self.hist.tag_configure(tag, foreground=color)
-        self.modem_log = tk.Text(outer, height=7, wrap="none", bg=FIELD, fg=DIM, relief="flat",
+        self.modem_log = tk.Text(self.logs, height=5, width=48, wrap="none", bg=FIELD, fg=DIM, relief="flat",
                                  highlightthickness=0, padx=8, pady=6, state="disabled",
                                  font=("TkFixedFont", 9))
         self.log_shown = False
@@ -397,10 +430,11 @@ class App:
 
     def _toggle_log(self):
         if self.log_shown:
-            self.modem_log.pack_forget()
+            self.logs.forget(self.modem_log)
         else:
-            self.modem_log.pack(fill="x", padx=14, pady=(6, 0))
+            self.logs.add(self.modem_log, weight=2)
         self.log_shown = not self.log_shown
+        self.log_btn.configure(text="Hide modem log" if self.log_shown else "Modem log")
 
     def _modem_line(self, line):
         self.modem_log.configure(state="normal")
@@ -927,8 +961,9 @@ class App:
         win = tk.Toplevel(self.root, bg=BG)
         win.title("Settings")
         win.transient(self.root)
-        win.resizable(False, False)
-        frm = ttk.Frame(win, padding=14)
+        area = scroll.ScrollArea(win, bg=BG)
+        area.pack(fill="both", expand=True)
+        frm = ttk.Frame(area.body, padding=14)
         frm.pack(fill="both", expand=True)
         fields = [("Station to call", "call", s["station"].get("call", "")),
                   ("Its frequency (shown only)", "freq", s["station"].get("freq", "")),
@@ -1031,6 +1066,9 @@ class App:
             s["rig_addr"] = rig_v.get().strip()
             s["echo_notify"] = bool(notify_v.get())
             s["stations_url"] = vars_["stations_url"].get().strip()
+            size = size_v.get().lower()
+            size_changed = size != str(s.get("text_size", "normal")).lower()
+            s["text_size"] = size
             self.store.save()
             self.rig_mhz = None
             self._fetch_stations()
@@ -1038,6 +1076,9 @@ class App:
             self._svc_tick(reschedule=False)
             self._show_station()
             win.destroy()
+            if size_changed:
+                messagebox.showinfo("HF Contact", "The new text size applies the next time you open HF Contact.",
+                                    parent=self.root)
             self._show_live(None)
             threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(s["status_url"]))),
                              daemon=True).start()
@@ -1050,15 +1091,26 @@ class App:
             vars_["status_url"].set(station_status.DEFAULT_URL)
             vars_["stations_url"].set(station_list.DEFAULT_URL)
 
-        btns = ttk.Frame(frm)
-        btns.grid(row=len(fields) + 2, column=0, columnspan=2, sticky="e")
+        # Save and Cancel stay on screen; only the fields above them scroll
+        bar = ttk.Frame(win, padding=(14, 8))
+        bar.pack(side="bottom", fill="x", before=area)
+        btns = ttk.Frame(bar)
+        btns.pack(side="top", anchor="e")
         ttk.Button(btns, text="List my station…", style="Update.TButton",
                    command=lambda: self._list_my_station(win)).pack(side="left", padx=(0, 24))
         ttk.Button(btns, text="Defaults", command=reset).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Save", style="Go.TButton", command=save).pack(side="left")
-        ttk.Label(frm, text=f"HF Contact {__version__}", style="Dim.TLabel").grid(
-            row=len(fields) + 3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        foot = ttk.Frame(bar)
+        foot.pack(side="top", fill="x", pady=(8, 0))
+        ttk.Label(foot, text=f"HF Contact {__version__}", style="Dim.TLabel").pack(side="left")
+        size_v = tk.StringVar(value=str(s.get("text_size", "normal")).capitalize())
+        ttk.Combobox(foot, textvariable=size_v, values=["Small", "Normal", "Large"], width=8,
+                     state="readonly").pack(side="right")
+        ttk.Label(foot, text="Text size", style="Dim.TLabel").pack(side="right", padx=(0, 6))
+        frm.columnconfigure(1, weight=1)
+        win.update_idletasks()
+        scroll.fit_to_screen(win, area.body.winfo_reqwidth(), area.needed_height())
 
     def _quit(self):
         if self.busy and not messagebox.askyesno("HF Contact", "A call is in progress. Hang up and quit?"):
@@ -1070,6 +1122,11 @@ class App:
             svc.join(12)                     # hang up on a caller properly before we go
             if not svc.running:
                 self._svc_mark(False)
+        try:
+            self.store.settings["window"] = f"{self.root.winfo_width()}x{self.root.winfo_height()}"
+            self.store.save()
+        except tk.TclError:
+            pass
         self.root.destroy()
 
 
@@ -1094,7 +1151,8 @@ def main():
     root = tk.Tk(className="hf-contact")
     set_icon(root)
     try:
-        root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 72.0))
+        size = scroll.text_scale(Store().settings.get("text_size"))
+        root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 72.0) * size)
     except tk.TclError:
         pass
     App(root)

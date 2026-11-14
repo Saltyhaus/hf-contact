@@ -19,7 +19,7 @@ By default it calls **AG7JC**. Settings can point it at any station running merc
 ## What you need
 
 - **Mercury** running on this computer, set up with your radio's audio and PTT. **Use Mercury 1.9.20 or newer**, like the station you're calling: 1.9.20 and later all connect to each other, but not to anything older (an older station hears the calls and never connects). AG7JC keeps up with the latest release.
-- **Nothing else using Mercury.** It only accepts one program at a time, so close Winlink Express, Pat or mercury-connector first.
+- **Nothing else using Mercury.** It serves one program at a time, and since 1.9.24 it turns the rest away. Close Winlink Express or Pat first, and stop mercury-connector (in [OffGrid Comms](https://github.com/Saltyhaus/offgrid-comms), press **Pause mail**: Mercury and the radio stay on). If Mercury turns HF Contact away, the app says which program has it (on Linux, for programs you started; on Windows it lists the usual ones).
 - **Your radio on the station's frequency.** For AG7JC, that's **14.105 MHz USB (dial)**.
 
 ## Install
@@ -47,6 +47,8 @@ To put it in your app menu with its icon: `./install.sh` (undo with `./install.s
 5. **Check for replies**: calls and collects anything waiting for you.
 
 **Hang up** ends a call early. History keeps everything on this computer, and the **Modem log** shows what Mercury reported.
+
+On a wide screen, History and the modem log sit beside the controls and use the window's full height; drag the handle between them to share the space. On a smaller screen the window fits the screen and scrolls instead of cutting off the bottom, and it remembers the size you leave it at. **Settings › Text size** (Small, Normal, Large) applies the next time you open the app.
 
 <img src="docs/version-mismatch.png" alt="Your Mercury differs from the station's" width="420">
 
