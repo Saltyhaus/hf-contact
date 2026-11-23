@@ -57,13 +57,19 @@ To put it in your app menu with its icon: `./install.sh` (undo with `./install.s
 
 **Hang up** ends a call early. History keeps everything on this computer, and the **Modem log** shows what Mercury reported.
 
-On a wide screen, History and the modem log sit beside the controls and use the window's full height; drag the handle between them to share the space. On a smaller screen the window fits the screen and scrolls instead of cutting off the bottom, and it remembers the size you leave it at. **Settings › Text size** (Small, Normal, Large) applies the next time you open the app.
+On a wide screen, History and the modem log sit beside the controls and use the window's full height; drag the handle between them to share the space. On a smaller screen the window fits the screen and scrolls instead of cutting off the bottom, and it remembers the size you leave it at. **Settings › Look** picks the colours: AG7JC (charcoal, bone and amber, the same as OffGrid Comms -- the default), Dark, Night (all red, for night vision), Light or Classic (the original teal). **Settings › Text size** (Small, Normal, Large). Both offer to restart the app to apply.
 
 <img src="docs/version-mismatch.png" alt="Your Mercury differs from the station's" width="420">
 
 If the station says it's off the air or busy, or your Mercury version doesn't match the station's, the app asks before calling: once. After that the line under **Calling** keeps saying it, with no more pop-ups until something changes. For a station that doesn't publish its version, it shows yours and reminds you that both ends need the same one.
 
-Once a day the app checks GitHub for a newer release and, if there is one, shows a quiet line with a link. No internet, nothing shown.
+Once a day the app checks GitHub for a newer release and, if there is one, shows a line: **HF Contact x.y.z is out -- Update now**. **Settings › Check for updates** asks right away. Update now asks first, then:
+
+- a **git clone** (the Linux install above) moves forward to the new version (if you've changed files in it, it leaves them alone and says so);
+- an **unzipped download** gets the new program files, with the old ones kept in `hf_contact.old`;
+- the **Windows .exe** is replaced by the new one, with the old one kept as `HF-Contact.exe.old`.
+
+Your settings and history stay, and HF Contact starts again by itself. It won't update during a call or while the echo service is on. No internet, nothing shown.
 
 Mercury's TNC port is 8300 unless you changed it. If you did, set it under **Settings**, along with the live status address (the station website's hf-contact.json) if you're calling a station other than AG7JC.
 

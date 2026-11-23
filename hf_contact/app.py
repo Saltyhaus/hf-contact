@@ -29,6 +29,7 @@ from . import stations as station_list
 from . import echo_service as es
 from . import mercury_version as mv
 from . import scroll
+from . import themes
 from . import status as station_status
 from .session import MAX_MESSAGE, compose_message, echo_summary, run_session, valid_call
 
@@ -38,8 +39,25 @@ DEFAULT_STATION = {
     "note": "Listening times and news: ag7jc.com",
 }
 
-BG, PANEL, FIELD, FG, DIM = "#12161a", "#1a1f24", "#0c0f12", "#cfd8dc", "#7d8a94"
-TEAL, ORANGE, GREEN, RED, GRAY = "#00d9d9", "#ff9500", "#33cc66", "#ff4444", "#5a6570"
+# colours: set from the theme picked in Settings (themes.py), before the window is built
+BG = PANEL = FIELD = FG = DIM = TEAL = ORANGE = GREEN = RED = GRAY = ""
+BORDER = BTN = BTN_ACTIVE = BTN_PRESS = GO = GO_ACTIVE = GO_PRESS = GO_FG = ""
+STOP = STOP_ACTIVE = STOP_PRESS = STOP_FG = ""
+
+
+def apply_theme(name):
+    """Point the colour names at a theme's palette. TEAL and ORANGE are the
+    accent and the warm colour (their names are from the first, teal look)."""
+    pal = themes.get(name)
+    g = globals()
+    for k, v in pal.items():
+        if k.isupper() and isinstance(v, str):
+            g[k] = v
+    g["TEAL"], g["ORANGE"] = pal["ACCENT"], pal["WARM"]
+
+
+apply_theme(themes.DEFAULT)
+
 
 
 def config_dir():
@@ -60,7 +78,7 @@ class Store:
                          "echo_schedule": "always", "echo_from": 18, "echo_to": 22, "echo_dial": "",
                          "echo_rules_ok": False, "echo_listening": False,
                          "echo_notify": True, "rig_addr": "", "stations_url": station_list.DEFAULT_URL,
-                         "update_checked": 0, "text_size": "normal", "window": ""}
+                         "update_checked": 0, "text_size": "normal", "window": "", "theme": themes.DEFAULT}
         self.history = []
         for path, attr in ((self.settings_path, "settings"), (self.history_path, "history")):
             try:
@@ -123,7 +141,7 @@ class App:
             st.theme_use("clam")
         except tk.TclError:
             pass
-        st.configure(".", background=BG, foreground=FG, fieldbackground=FIELD, bordercolor="#262d33",
+        st.configure(".", background=BG, foreground=FG, fieldbackground=FIELD, bordercolor=BORDER,
                      lightcolor=PANEL, darkcolor=PANEL, troughcolor=FIELD, focuscolor=TEAL)
         st.configure("TFrame", background=BG)
         st.configure("Card.TFrame", background=PANEL)
@@ -135,32 +153,32 @@ class App:
         st.configure("Call.TLabel", background=PANEL, foreground=TEAL, font=("TkFixedFont", 13, "bold"))
         st.configure("TEntry", foreground=FG, insertcolor=FG, padding=5)
         st.map("TEntry", fieldbackground=[("disabled", PANEL)])
-        st.configure("TButton", background="#262d33", foreground=FG, padding=(12, 7), borderwidth=0)
-        st.map("TButton", background=[("pressed", "#1b2026"), ("active", "#323a42"), ("disabled", PANEL)],
+        st.configure("TButton", background=BTN, foreground=FG, padding=(12, 7), borderwidth=0)
+        st.map("TButton", background=[("pressed", BTN_PRESS), ("active", BTN_ACTIVE), ("disabled", PANEL)],
                foreground=[("disabled", GRAY)])
-        st.configure("Go.TButton", background="#009a9a", foreground="white", font=("TkDefaultFont", 10, "bold"))
-        st.map("Go.TButton", background=[("pressed", "#00797a"), ("active", "#00b3b3"), ("disabled", PANEL)],
+        st.configure("Go.TButton", background=GO, foreground=GO_FG, font=("TkDefaultFont", 10, "bold"))
+        st.map("Go.TButton", background=[("pressed", GO_PRESS), ("active", GO_ACTIVE), ("disabled", PANEL)],
                foreground=[("disabled", GRAY)])
-        st.configure("Stop.TButton", background="#b71c1c", foreground="white")
-        st.map("Stop.TButton", background=[("pressed", "#7f1010"), ("active", "#d32626")])
+        st.configure("Stop.TButton", background=STOP, foreground=STOP_FG)
+        st.map("Stop.TButton", background=[("pressed", STOP_PRESS), ("active", STOP_ACTIVE)])
         st.configure("Card.TCheckbutton", background=PANEL, foreground=FG, font=("TkDefaultFont", 10, "bold"),
                      indicatorbackground=FIELD, indicatorforeground=TEAL)
         st.map("Card.TCheckbutton", background=[("active", PANEL)],
-               indicatorbackground=[("selected", "#009a9a"), ("active", "#262d33")],
-               indicatorforeground=[("selected", "white")])
+               indicatorbackground=[("selected", GO), ("active", BTN)],
+               indicatorforeground=[("selected", GO_FG)])
         st.configure("Link.TButton", background=PANEL, foreground=TEAL, padding=(6, 2))
         st.configure("Update.TButton", background=BG, foreground=TEAL, padding=(0, 2))
         st.map("Update.TButton", background=[("active", BG)], foreground=[("active", FG)])
-        st.configure("TCombobox", background="#262d33", arrowcolor=FG)
+        st.configure("TCombobox", background=BTN, arrowcolor=FG)
         st.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
                selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)],
-               background=[("readonly", "#262d33")], arrowcolor=[("readonly", FG)])
-        st.map("TRadiobutton", background=[("active", BG)], indicatorbackground=[("selected", "#009a9a")])
-        st.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", "#009a9a")])
-        for opt, val in (("background", FIELD), ("foreground", FG), ("selectBackground", "#009a9a"),
-                         ("selectForeground", "white")):
+               background=[("readonly", BTN)], arrowcolor=[("readonly", FG)])
+        st.map("TRadiobutton", background=[("active", BG)], indicatorbackground=[("selected", GO)])
+        st.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", GO)])
+        for opt, val in (("background", FIELD), ("foreground", FG), ("selectBackground", GO),
+                         ("selectForeground", GO_FG)):
             self.root.option_add(f"*TCombobox*Listbox.{opt}", val)
-        st.map("Link.TButton", background=[("active", "#262d33")])
+        st.map("Link.TButton", background=[("active", BTN)])
 
     def _size_window(self):
         """Fit the screen: a 768-pixel laptop can't show it all, so the
@@ -195,8 +213,8 @@ class App:
         ttk.Label(outer, text="HF CONTACT", style="Title.TLabel").pack(anchor="w", **pad)
         ttk.Label(outer, text="Echo test and short messages over HF, through your own Mercury modem.",
                   style="Dim.TLabel", wraplength=700, justify="left").pack(anchor="w", **pad)
-        self.update_btn = ttk.Button(outer, text="", style="Update.TButton",
-                                     command=lambda: webbrowser.open(updates.RELEASES_PAGE))
+        self.update_btn = ttk.Button(outer, text="", style="Update.TButton", command=self._update_now)
+        self.update_ver = None
 
         # the station we call
         card = ttk.Frame(outer, style="Card.TFrame", padding=10)
@@ -256,7 +274,7 @@ class App:
         # message
         ttk.Label(outer, text="Message", style="Dim.TLabel").pack(anchor="w", pady=(8, 2), **pad)
         self.msg = tk.Text(outer, height=4, wrap="word", bg=FIELD, fg=FG, insertbackground=FG,
-                           relief="flat", highlightthickness=1, highlightbackground="#262d33",
+                           relief="flat", highlightthickness=1, highlightbackground=BORDER,
                            highlightcolor=TEAL, padx=8, pady=6, font=("TkDefaultFont", 11))
         self.msg.pack(fill="x", **pad)
         self.msg.bind("<<Modified>>", self._count)
@@ -540,9 +558,11 @@ class App:
                         self.list_submit = val.get("submit")
                         self.list_cached_at = val.get("cached_at")
                 elif kind == "update":
-                    if val:
-                        self.update_btn.configure(text=f"HF Contact {val} is out. Get it \u2192")
-                        self.update_btn.pack(anchor="w", padx=14, before=self.update_anchor)
+                    self._update_found(val)
+                elif kind == "update-asked":
+                    self._update_found(val, asked=True)
+                elif kind == "updated":
+                    self._updated(*val)
                 elif kind == "rig":
                     if val != self.rig_mhz:
                         self.rig_mhz = val
@@ -825,6 +845,65 @@ class App:
         threading.Thread(target=lambda: self.events.put(("stations", station_list.fetch_cached(url, cache))),
                          daemon=True).start()
 
+    def _update_found(self, version, asked=False):
+        if version:
+            self.update_ver = version
+            self.update_btn.configure(text=f"HF Contact {version} is out -- Update now \u2192")
+            self.update_btn.pack(anchor="w", padx=14, before=self.update_anchor)
+            if asked:
+                self._update_now()
+        elif asked:
+            messagebox.showinfo("HF Contact", f"You have the latest: HF Contact {__version__}.", parent=self.root)
+
+    def check_update_now(self):
+        """Settings > Check for updates: ask GitHub right away."""
+        threading.Thread(target=lambda: self.events.put(("update-asked", updates.check(__version__))),
+                         daemon=True).start()
+
+    def _update_now(self):
+        v = self.update_ver
+        if not v:
+            return
+        if self.busy or self.svc:
+            messagebox.showinfo("HF Contact", "Finish the call (and switch the echo service off) first, then "
+                                "Update now.", parent=self.root)
+            return
+        mode = updates.how()
+        where = {"git": "This folder is a git clone: it moves forward to the new version.",
+                 "zip": "The program files are replaced; the old ones are kept in hf_contact.old.",
+                 "exe": "The new HF-Contact.exe replaces this one; the old one is kept as .old."}[mode]
+        if not messagebox.askyesno("Update HF Contact", f"Update from {__version__} to {v}?\n\n{where} Your "
+                                   "settings and history stay. HF Contact starts again afterwards.\n\n"
+                                   "What's new: github.com/Saltyhaus/hf-contact/releases", parent=self.root):
+            return
+        self.update_btn.configure(text=f"Updating to {v}\u2026", state="disabled")
+        threading.Thread(target=lambda: self.events.put(("updated", (v, *updates.install(v)))), daemon=True).start()
+
+    def _updated(self, version, ok, msg):
+        self.update_btn.configure(state="normal")
+        if not ok:
+            self.update_btn.configure(text=f"HF Contact {version} is out -- Update now \u2192")
+            if messagebox.askyesno("Not updated", f"{msg}\n\nOpen the download page instead?", parent=self.root):
+                webbrowser.open(updates.RELEASES_PAGE)
+            return
+        messagebox.showinfo("HF Contact", f"{msg[0].upper() + msg[1:]}. Starting it again now.", parent=self.root)
+        self._restart()
+
+    def _restart(self):
+        """Close properly, then start HF Contact again the same way."""
+        import subprocess
+        cmd = updates.restart_cmd()
+        if not self._quit(ask=False):
+            return
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen(cmd, cwd=str(Path(sys.executable).parent))
+            else:
+                os.chdir(str(updates.app_root()))
+                os.execv(cmd[0], cmd)
+        except OSError as e:
+            print(f"couldn't start HF Contact again: {e}", file=sys.stderr)
+
     def _check_update(self):
         """Once a day: is there a newer release? Quiet line if so."""
         s = self.store.settings
@@ -1069,6 +1148,9 @@ class App:
             size = size_v.get().lower()
             size_changed = size != str(s.get("text_size", "normal")).lower()
             s["text_size"] = size
+            theme = themes.by_label(look_v.get())
+            size_changed = size_changed or theme != s.get("theme", themes.DEFAULT)
+            s["theme"] = theme
             self.store.save()
             self.rig_mhz = None
             self._fetch_stations()
@@ -1077,8 +1159,13 @@ class App:
             self._show_station()
             win.destroy()
             if size_changed:
-                messagebox.showinfo("HF Contact", "The new text size applies the next time you open HF Contact.",
-                                    parent=self.root)
+                if self.busy or self.svc:
+                    messagebox.showinfo("HF Contact", "The new look and text size apply the next time you open "
+                                        "HF Contact.", parent=self.root)
+                elif messagebox.askyesno("HF Contact", "Restart HF Contact now to use the new look / text size?",
+                                         parent=self.root):
+                    self.root.after(100, self._restart)
+                    return
             self._show_live(None)
             threading.Thread(target=lambda: self.events.put(("live", station_status.fetch(s["status_url"]))),
                              daemon=True).start()
@@ -1104,17 +1191,23 @@ class App:
         foot = ttk.Frame(bar)
         foot.pack(side="top", fill="x", pady=(8, 0))
         ttk.Label(foot, text=f"HF Contact {__version__}", style="Dim.TLabel").pack(side="left")
+        ttk.Button(foot, text="Check for updates", style="Update.TButton",
+                   command=self.check_update_now).pack(side="left", padx=(10, 0))
         size_v = tk.StringVar(value=str(s.get("text_size", "normal")).capitalize())
         ttk.Combobox(foot, textvariable=size_v, values=["Small", "Normal", "Large"], width=8,
                      state="readonly").pack(side="right")
         ttk.Label(foot, text="Text size", style="Dim.TLabel").pack(side="right", padx=(0, 6))
+        look_v = tk.StringVar(value=themes.get(s.get("theme")).get("label"))
+        ttk.Combobox(foot, textvariable=look_v, values=[lb for _k, lb in themes.CHOICES], width=13,
+                     state="readonly").pack(side="right", padx=(0, 14))
+        ttk.Label(foot, text="Look", style="Dim.TLabel").pack(side="right", padx=(0, 6))
         frm.columnconfigure(1, weight=1)
         win.update_idletasks()
         scroll.fit_to_screen(win, area.body.winfo_reqwidth(), area.needed_height())
 
-    def _quit(self):
-        if self.busy and not messagebox.askyesno("HF Contact", "A call is in progress. Hang up and quit?"):
-            return
+    def _quit(self, ask=True):
+        if ask and self.busy and not messagebox.askyesno("HF Contact", "A call is in progress. Hang up and quit?"):
+            return False
         if self.cancel:
             self.cancel.set()
         svc = self._svc_stop("off")
@@ -1128,6 +1221,7 @@ class App:
         except tk.TclError:
             pass
         self.root.destroy()
+        return True
 
 
 def resource(name):
@@ -1150,8 +1244,10 @@ def main():
     # the desktop file's StartupWMClass matches, so the dock shows our icon
     root = tk.Tk(className="hf-contact")
     set_icon(root)
+    settings = Store().settings
+    apply_theme(settings.get("theme"))
     try:
-        size = scroll.text_scale(Store().settings.get("text_size"))
+        size = scroll.text_scale(settings.get("text_size"))
         root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 72.0) * size)
     except tk.TclError:
         pass
